@@ -1,0 +1,27 @@
+defaults:
+  - dot_avoidance
+  - _self_
+
+exp_name: dot_avoidance_fast
+
+# Match the smaller RGB encoder's output to the 128-dimensional latent state.
+model_size: 1
+num_channels: 8
+
+# Shorter runs and less learning work per collected transition.
+steps: 100000
+batch_size: 64
+updates_per_transition: 0.25
+buffer_size: 20000
+
+# Smaller MPC search.
+horizon: 2
+iterations: 2
+num_samples: 64
+num_elites: 8
+num_pi_trajs: 8
+
+# Lower evaluation cost.
+eval_episodes: 2
+eval_freq: 10000
+save_video: false
