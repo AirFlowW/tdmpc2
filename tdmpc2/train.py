@@ -17,6 +17,7 @@ from envs import make_env
 from tdmpc2 import TDMPC2
 from trainer.offline_trainer import OfflineTrainer
 from trainer.online_trainer import OnlineTrainer
+from common.device import configure_device
 from common.logger import Logger
 
 torch.backends.cudnn.benchmark = True
@@ -43,21 +44,32 @@ def train(cfg: dict):
 		$ python train.py task=dog-run steps=7000000
 	```
 	"""
-	assert torch.cuda.is_available()
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
+	configure_device(cfg)
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
-	trainer_cls = OfflineTrainer if cfg.multitask else OnlineTrainer
-	trainer = trainer_cls(
-		cfg=cfg,
-		env=make_env(cfg),
-		agent=TDMPC2(cfg),
-		buffer=Buffer(cfg),
-		logger=Logger(cfg),
-	)
-	trainer.train()
+	if cfg.task == 'dot-avoidance':
+		from trainer.vector_trainer import VectorTrainer
+		from environments.tdmpc2 import make_vector_env
+		env = make_vector_env(cfg)
+		trainer_cls = VectorTrainer
+	else:
+		env = make_env(cfg)
+		trainer_cls = OfflineTrainer if cfg.multitask else OnlineTrainer
+	try:
+		trainer = trainer_cls(
+			cfg=cfg,
+			env=env,
+			agent=TDMPC2(cfg),
+			buffer=Buffer(cfg),
+			logger=Logger(cfg),
+		)
+		trainer.train()
+	finally:
+		if cfg.task == 'dot-avoidance':
+			env.close()
 	print('\nTraining completed successfully')
 
 

@@ -2,6 +2,7 @@ from time import time
 
 import numpy as np
 import torch
+from common.device import mark_step
 from tensordict.tensordict import TensorDict
 from trainer.base import Trainer
 
@@ -33,7 +34,7 @@ class OnlineTrainer(Trainer):
 			if self.cfg.save_video:
 				self.logger.video.init(self.env, enabled=(i==0))
 			while not done:
-				torch.compiler.cudagraph_mark_step_begin()
+				mark_step(self.agent.device)
 				action = self.agent.act(obs, t0=t==0, eval_mode=True)
 				obs, reward, done, info = self.env.step(action)
 				ep_reward += reward

@@ -1,4 +1,9 @@
 import dataclasses
+import json
+import subprocess
+from pathlib import Path
+import yaml
+import imageio.v2 as imageio
 import os
 import datetime
 import re
@@ -88,7 +93,7 @@ class VideoRecorder:
 
 	def init(self, env, enabled=True):
 		self.frames = []
-		self.enabled = self._save_dir and self._wandb and enabled
+		self.enabled = bool(self._save_dir and enabled)
 		self.record(env)
 
 	def record(self, env):
@@ -96,11 +101,12 @@ class VideoRecorder:
 			self.frames.append(env.render())
 
 	def save(self, step, key='videos/eval_video'):
-		if self.enabled and len(self.frames) > 0:
+		if self.enabled and self.frames:
 			frames = np.stack(self.frames)
-			return self._wandb.log(
-				{key: self._wandb.Video(frames.transpose(0, 3, 1, 2), fps=self.fps, format='mp4')}, step=step
-			)
+			imageio.mimsave(os.path.join(self._save_dir, f'{step}.mp4'), frames, fps=self.fps)
+			if self._wandb:
+				self._wandb.log({key: self._wandb.Video(frames.transpose(0, 3, 1, 2),
+					fps=self.fps, format='mp4')}, step=step)
 
 
 class Logger:
@@ -114,15 +120,26 @@ class Logger:
 		self._group = cfg_to_group(cfg)
 		self._seed = cfg.seed
 		self._eval = []
+		self._records = {}
+		resolved = json.loads(json.dumps(dataclasses.asdict(cfg), default=str))
+		with open(cfg.work_dir / 'config.yaml', 'w') as stream:
+			yaml.safe_dump(resolved, stream, sort_keys=False)
+		revisions = {}
+		repo_root = Path(__file__).resolve().parents[4]
+		for name, directory in [('root', repo_root), ('tdmpc2', repo_root / 'forks/tdmpc2'),
+				('sensorimotor', repo_root / 'forks/sensorimotor-world-model')]:
+			result = subprocess.run(['git', '-C', str(directory), 'rev-parse', 'HEAD'],
+				capture_output=True, text=True)
+			revisions[name] = result.stdout.strip()
+		with open(cfg.work_dir / 'revisions.json', 'w') as stream:
+			json.dump(revisions, stream, indent=2)
 		print_run(cfg)
 		self.project = cfg.get("wandb_project", "none")
 		self.entity = cfg.get("wandb_entity", "none")
 		if not cfg.enable_wandb or self.project == "none" or self.entity == "none":
 			print(colored("Wandb disabled.", "blue", attrs=["bold"]))
-			cfg.save_agent = False
-			cfg.save_video = False
 			self._wandb = None
-			self._video = None
+			self._video = VideoRecorder(cfg, None) if cfg.save_video else None
 			return
 		os.environ["WANDB_SILENT"] = "true" if cfg.wandb_silent else "false"
 		import wandb
@@ -232,10 +249,18 @@ class Logger:
 			for k, v in d.items():
 				_d[category + "/" + k] = v
 			self._wandb.log(_d, step=d[xkey])
-		if category == "eval" and self._save_csv:
-			keys = ["step", "episode_reward"]
-			self._eval.append(np.array([d[keys[0]], d[keys[1]]]))
-			pd.DataFrame(np.array(self._eval)).to_csv(
-				self._log_dir / "eval.csv", header=keys, index=None
-			)
+		local = {}
+		for key, value in d.items():
+			if hasattr(value, 'detach'):
+				value = value.detach().cpu().item()
+			elif isinstance(value, np.generic):
+				value = value.item()
+			local[key] = value
+		with open(os.path.join(self._log_dir, f'{category}.jsonl'), 'a') as stream:
+			stream.write(json.dumps(local) + '\n')
+		if self._save_csv:
+			self._records.setdefault(category, []).append(local)
+			pd.DataFrame(self._records[category]).to_csv(
+				os.path.join(self._log_dir, f'{category}.csv'), index=False)
+
 		self._print(d, category)

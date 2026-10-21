@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from common import math
+from common.device import configure_device, mark_step
 from common.scale import RunningScale
 from common.world_model import WorldModel
 from common.layers import api_model_conversion
@@ -17,7 +18,11 @@ class TDMPC2(torch.nn.Module):
 	def __init__(self, cfg):
 		super().__init__()
 		self.cfg = cfg
-		self.device = torch.device('cuda:0')
+		self.device = configure_device(cfg)
+		if not (0 <= cfg.num_pi_trajs <= cfg.num_samples and 0 < cfg.num_elites <= cfg.num_samples):
+			raise ValueError('Require 0 <= num_pi_trajs <= num_samples and 0 < num_elites <= num_samples')
+		if cfg.iterations < 1 or cfg.horizon < 1:
+			raise ValueError('iterations and horizon must be positive')
 		self.model = WorldModel(cfg).to(self.device)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
@@ -27,13 +32,13 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._Qs.parameters()},
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []
 			 }
-		], lr=self.cfg.lr, capturable=True)
-		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=True)
+		], lr=self.cfg.lr, capturable=self.device.type == 'cuda', foreach=False if self.device.type != 'cuda' else None)
+		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=self.device.type == 'cuda', foreach=False if self.device.type != 'cuda' else None)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces
 		self.discount = torch.tensor(
-			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device='cuda:0'
+			[self._get_discount(ep_len) for ep_len in cfg.episode_lengths], device=self.device
 		) if self.cfg.multitask else self._get_discount(cfg.episode_length)
 		print('Episode length:', cfg.episode_length)
 		print('Discount factor:', self.discount)
@@ -88,7 +93,7 @@ class TDMPC2(torch.nn.Module):
 		if isinstance(fp, dict):
 			state_dict = fp
 		else:
-			state_dict = torch.load(fp, map_location=torch.get_default_device(), weights_only=False)
+			state_dict = torch.load(fp, map_location=self.device, weights_only=False)
 		state_dict = state_dict["model"] if "model" in state_dict else state_dict
 		state_dict = api_model_conversion(self.model.state_dict(), state_dict)
 		self.model.load_state_dict(state_dict)
@@ -120,10 +125,41 @@ class TDMPC2(torch.nn.Module):
 		return action[0].cpu()
 
 	@torch.no_grad()
+	def act_batch(self, observations, reset_mask=None, eval_mode=False):
+		"""Plan for independent single-task environments, preserving per-worker history.
+
+		Evaluation and collection have separate warm starts. The scalar API and
+		multi-task implementation are unchanged.
+		"""
+		from common.planning import batched_plan
+		if self.cfg.multitask:
+			raise ValueError('Batched collection currently supports single-task agents only')
+		obs = torch.as_tensor(observations).to(self.device)
+		if not self.cfg.mpc:
+			z = self.model.encode(obs, None)
+			action, info = self.model.pi(z, None)
+			return (info['mean'] if eval_mode else action).cpu()
+		reset = torch.ones(len(obs), dtype=torch.bool, device=self.device) if reset_mask is None else \
+			torch.as_tensor(reset_mask, dtype=torch.bool, device=self.device)
+		if reset.shape != (len(obs),):
+			raise ValueError('reset_mask must have one entry per environment')
+		if not hasattr(self, '_batch_means'):
+			self._batch_means = {}
+		previous = self._batch_means.get(eval_mode)
+		shape = (self.cfg.horizon, len(obs), self.cfg.action_dim)
+		if previous is None or previous.shape != shape:
+			previous = torch.zeros(shape, device=self.device)
+		if not hasattr(self, '_batch_plan'):
+			self._batch_plan = torch.compile(batched_plan, mode='reduce-overhead') if self.cfg.compile else batched_plan
+		action, mean = self._batch_plan(self, obs, previous, reset, eval_mode)
+		self._batch_means[eval_mode] = mean.clone()
+		return action.cpu().clone()
+
+	@torch.no_grad()
 	def _estimate_value(self, z, actions, task):
 		"""Estimate value of a trajectory starting at latent state z and executing given actions."""
 		G, discount = 0, 1
-		termination = torch.zeros(self.cfg.num_samples, 1, dtype=torch.float32, device=z.device)
+		termination = torch.zeros(z.shape[0], 1, dtype=torch.float32, device=z.device)
 		for t in range(self.cfg.horizon):
 			reward = math.two_hot_inv(self.model.reward(z, actions[t], task), self.cfg)
 			z = self.model.next(z, actions[t], task)
@@ -345,5 +381,5 @@ class TDMPC2(torch.nn.Module):
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
-		torch.compiler.cudagraph_mark_step_begin()
+		mark_step(self.device)
 		return self._update(obs, action, reward, terminated, **kwargs)

@@ -87,5 +87,22 @@ episode_length: ???
 obs_shapes: ???
 action_dims: ???
 episode_lengths: ???
-seed_steps: ???
+seed_steps: null
 bin_size: ???
+
+# Dot avoidance / portable single-learner training
+# num_envs=null selects min(8, available CPU cores).
+device: auto
+cpu_threads: 4
+num_envs: null
+vector_backend: auto
+frame_stack: 3
+updates_per_transition: 1.0
+buffer_device: auto
+dot:
+    num_obstacles: 4
+    image_size: 64
+    dot_radius: 2
+    agent_speed: 2.0
+    obstacle_speed: 2.0
+    max_episode_steps: 500

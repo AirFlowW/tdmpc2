@@ -1,0 +1,12 @@
+defaults:
+  - config
+  - _self_
+
+task: dot-avoidance
+obs: rgb
+model_size: 5
+steps: 1000000
+buffer_size: 100000
+buffer_device: cpu
+enable_wandb: false
+exp_name: dot_avoidance

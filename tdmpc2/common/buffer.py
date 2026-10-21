@@ -12,7 +12,7 @@ class Buffer():
 
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self._device = torch.device('cuda:0')
+		self._device = torch.device(cfg.device)
 		self._capacity = min(cfg.buffer_size, cfg.steps)
 		self._sampler = SliceSampler(
 			num_slices=self.cfg.batch_size,
@@ -24,6 +24,7 @@ class Buffer():
 		)
 		self._batch_size = cfg.batch_size * (cfg.horizon+1)
 		self._num_eps = 0
+		self._valid_episodes = 0
 
 	@property
 	def capacity(self):
@@ -50,7 +51,7 @@ class Buffer():
 	def _init(self, tds):
 		"""Initialize the replay buffer. Use the first episode to estimate storage requirements."""
 		print(f'Buffer capacity: {self._capacity:,}')
-		mem_free, _ = torch.cuda.mem_get_info()
+		mem_free = torch.cuda.mem_get_info(self._device)[0] if self._device.type == 'cuda' else 0
 		bytes_per_step = sum([
 				(v.numel()*v.element_size() if not isinstance(v, TensorDict) \
 				else sum([x.numel()*x.element_size() for x in v.values()])) \
@@ -59,7 +60,11 @@ class Buffer():
 		total_bytes = bytes_per_step*self._capacity
 		print(f'Storage required: {total_bytes/1e9:.2f} GB')
 		# Heuristic: decide whether to use CUDA or CPU memory
-		storage_device = 'cuda:0' if 2.5*total_bytes < mem_free else 'cpu'
+		storage_device = self.cfg.get('buffer_device', 'auto')
+		if storage_device == 'auto':
+			storage_device = str(self._device) if self._device.type == 'cuda' and 2.5*total_bytes < mem_free else 'cpu'
+		if torch.device(storage_device).type not in {'cpu', 'cuda'}:
+			raise ValueError('Replay storage must be cpu or cuda; MPS learners sample from CPU replay')
 		print(f'Using {storage_device.upper()} memory for storage.')
 		self._storage_device = torch.device(storage_device)
 		return self._reserve_buffer(
@@ -78,11 +83,15 @@ class Buffer():
 			self._buffer = self._init(td[0])
 		td = td.reshape(td.shape[0]*td.shape[1])
 		self._buffer.extend(td)
+		self._valid_episodes += num_new_eps
 		self._num_eps += num_new_eps
 		return self._num_eps
 
 	def add(self, td):
 		"""Add an episode to the buffer."""
+		if len(td) < self.cfg.horizon + 1:
+			return self._num_eps
+		self._valid_episodes += 1
 		td['episode'] = torch.full_like(td['reward'], self._num_eps, dtype=torch.int64)
 		if self._num_eps == 0:
 			self._buffer = self._init(td)
@@ -108,6 +117,10 @@ class Buffer():
 		if task is not None:
 			task = task[0].contiguous()
 		return obs, action, reward, terminated, task
+
+	@property
+	def ready(self):
+		return self._valid_episodes > 0
 
 	def sample(self):
 		"""Sample a batch of subsequences from the buffer."""
