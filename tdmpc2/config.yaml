@@ -100,6 +100,8 @@ frame_stack: 3
 updates_per_transition: 1.0
 buffer_device: auto
 dot:
+    predictable: false
+    partial_obs: false
     num_obstacles: 4
     image_size: 64
     dot_radius: 2

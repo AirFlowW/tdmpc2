@@ -7,7 +7,7 @@ import torch
 from tensordict import TensorDict
 
 from common.device import mark_step
-from environments.tdmpc2 import make_dot_env
+from environments.evaluation import TDMPCPolicy, evaluate_conditions, training_metrics
 from trainer.base import Trainer
 
 
@@ -28,7 +28,6 @@ class VectorTrainer(Trainer):
         self._start = perf_counter()
         self._collection_time = self._planning_time = self._update_time = 0.0
         self._last_metrics = {}
-        self._eval_env = make_dot_env(self.cfg.dot, self.cfg.obs, self.cfg.frame_stack)
         self._action_rng = np.random.default_rng(self.cfg.seed + 100_000)
         self._tds = []
 
@@ -41,29 +40,11 @@ class VectorTrainer(Trainer):
                     collection_steps_per_second=self._step / max(self._collection_time, 1e-9))
 
     def eval(self):
-        results, rates, successes = [], [], []
-        for episode in range(self.cfg.eval_episodes):
-            # Repeat the same held-out episodes at every evaluation.
-            obs, info = self._eval_env.reset(seed=self.cfg.seed + 1_000_000 + episode)
-            reward_sum = 0
-            if self.logger.video:
-                self.logger.video.init(self._eval_env, enabled=episode == 0)
-            for t in range(self.cfg.episode_length):
-                mark_step(self.agent.device)
-                action = self.agent.act_batch(obs[None], [t == 0], eval_mode=True)[0].numpy()
-                obs, reward, terminated, truncated, info = self._eval_env.step(action)
-                reward_sum += reward
-                if self.logger.video:
-                    self.logger.video.record(self._eval_env)
-                if terminated or truncated:
-                    break
-            results.append(reward_sum)
-            rates.append(info['collision_steps'] / info['elapsed_steps'])
-            successes.append(info['success'])
-            if self.logger.video and episode == 0:
-                self.logger.video.save(self._step)
-        return dict(episode_reward=np.mean(results), collision_step_rate=np.mean(rates),
-                    collision_free_episode_fraction=np.mean(successes), episode_success=np.mean(successes))
+        results = evaluate_conditions(
+            self.cfg.dot, self.cfg.obs, self.cfg.frame_stack, TDMPCPolicy(self.agent),
+            self.cfg.eval_episodes, self.cfg.seed + 1_000_000,
+            video=self.logger.video, video_step=self._step)
+        return training_metrics(results, self.cfg.dot.get('partial_obs', False))
 
     def _flush(self):
         for rows in self._tds:
@@ -139,4 +120,3 @@ class VectorTrainer(Trainer):
         finally:
             self._flush()
             self.env.close()
-            self._eval_env.close()

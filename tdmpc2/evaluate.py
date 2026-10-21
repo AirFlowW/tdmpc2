@@ -42,6 +42,20 @@ def evaluate(cfg: dict):
 	assert cfg.eval_episodes > 0, 'Must evaluate at least 1 episode.'
 	cfg = parse_cfg(cfg)
 	cfg.checkpoint = hydra.utils.to_absolute_path(cfg.checkpoint)
+	if cfg.task == 'dot-avoidance':
+		import json
+		from environments.evaluate import evaluate_checkpoint
+
+		cfg.compile = False
+		report = evaluate_checkpoint(
+			cfg, cfg.checkpoint, episodes=cfg.eval_episodes, seed=cfg.seed + 1_000_000,
+			video_dir=cfg.work_dir / 'videos' if cfg.save_video else None,
+			include_baselines=False)
+		cfg.work_dir.mkdir(parents=True, exist_ok=True)
+		encoded = json.dumps(report, indent=2)
+		(cfg.work_dir / 'evaluation.json').write_text(encoded + '\n')
+		print(encoded)
+		return
 	set_seed(cfg.seed)
 	print(colored(f'Task: {cfg.task}', 'blue', attrs=['bold']))
 	print(colored(f'Model size: {cfg.get("model_size", "default")}', 'blue', attrs=['bold']))

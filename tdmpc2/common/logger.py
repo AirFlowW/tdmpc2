@@ -3,7 +3,6 @@ import json
 import subprocess
 from pathlib import Path
 import yaml
-import imageio.v2 as imageio
 import os
 import datetime
 import re
@@ -13,6 +12,7 @@ import pandas as pd
 from termcolor import colored
 
 from common import TASK_SET
+from environments.video import ObservationVideoRecorder
 
 
 CONSOLE_FORMAT = [
@@ -80,33 +80,12 @@ def cfg_to_group(cfg, return_list=False):
 	return lst if return_list else "-".join(lst)
 
 
-class VideoRecorder:
+class VideoRecorder(ObservationVideoRecorder):
 	"""Utility class for logging evaluation videos."""
 
 	def __init__(self, cfg, wandb, fps=15):
 		self.cfg = cfg
-		self._save_dir = make_dir(cfg.work_dir / 'eval_video')
-		self._wandb = wandb
-		self.fps = fps
-		self.frames = []
-		self.enabled = False
-
-	def init(self, env, enabled=True):
-		self.frames = []
-		self.enabled = bool(self._save_dir and enabled)
-		self.record(env)
-
-	def record(self, env):
-		if self.enabled:
-			self.frames.append(env.render())
-
-	def save(self, step, key='videos/eval_video'):
-		if self.enabled and self.frames:
-			frames = np.stack(self.frames)
-			imageio.mimsave(os.path.join(self._save_dir, f'{step}.mp4'), frames, fps=self.fps)
-			if self._wandb:
-				self._wandb.log({key: self._wandb.Video(frames.transpose(0, 3, 1, 2),
-					fps=self.fps, format='mp4')}, step=step)
+		super().__init__(cfg.work_dir / 'eval_video', wandb, fps)
 
 
 class Logger:
