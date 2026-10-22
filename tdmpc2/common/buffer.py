@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from tensordict.tensordict import TensorDict
 from torchrl.data.replay_buffers import ReplayBuffer, LazyTensorStorage
@@ -13,7 +14,7 @@ class Buffer():
 	def __init__(self, cfg):
 		self.cfg = cfg
 		self._device = torch.device(cfg.device)
-		self._capacity = min(cfg.buffer_size, cfg.steps)
+		self._capacity = cfg.buffer_size if cfg.get('pretrain_data_path') else min(cfg.buffer_size, cfg.steps)
 		self._sampler = SliceSampler(
 			num_slices=self.cfg.batch_size,
 			end_key=None,
@@ -128,3 +129,57 @@ class Buffer():
 		"""Sample a batch of subsequences from the buffer."""
 		td = self._buffer.sample().view(-1, self.cfg.horizon+1).permute(1, 0)
 		return self._prepare_batch(td)
+
+	def chronological_indices(self):
+		"""Physical indices of occupied rows, oldest first (including ring fragments)."""
+		if not hasattr(self, '_buffer'):
+			return torch.empty(0, dtype=torch.long)
+		length = len(self._buffer)
+		start = self._buffer.writer.state_dict()['_cursor'] if length == self.capacity else 0
+		return (torch.arange(length) + start) % self.capacity
+
+	def save_dataset(self, path, **kwargs):
+		from common.replay_dataset import save_dataset
+		return save_dataset(self, path, **kwargs)
+
+	def load_dataset(self, path):
+		"""Load all rows without discarding short fragments or changing field values."""
+		from common.replay_dataset import iter_dataset_chunks, read_manifest
+		if self.cfg.task != 'dot-avoidance':
+			raise ValueError('Replay datasets currently support dot-avoidance only')
+		if hasattr(self, '_buffer') and len(self._buffer):
+			raise ValueError('Replay datasets must be loaded into an empty buffer')
+		manifest = read_manifest(path, self.cfg, self.capacity)
+		for td in iter_dataset_chunks(path, manifest):
+			if not hasattr(self, '_buffer'):
+				self._buffer = self._init(td)
+			self._buffer.extend(td)
+		self._num_eps = max(s['episode'] for s in manifest['segments']) + 1
+		self._valid_episodes = sum(s['length'] >= self.cfg.horizon + 1 for s in manifest['segments'])
+		return manifest
+
+	def valid_window_starts(self):
+		"""Enumerate every horizon+1 window in chronological coordinates."""
+		from common.replay_dataset import episode_segments
+		indices = self.chronological_indices()
+		if not len(indices):
+			return np.empty(0, dtype=np.int64)
+		episodes = self._buffer.storage.get(slice(None))['episode'][indices].cpu().numpy()
+		starts = [np.arange(s['start'], s['start'] + s['length'] - self.cfg.horizon, dtype=np.int64)
+				  for s in episode_segments(episodes) if s['length'] > self.cfg.horizon]
+		return np.concatenate(starts) if starts else np.empty(0, dtype=np.int64)
+
+	def iter_epoch_batches(self, starts, rng):
+		"""Visit each start once, padding only the final batch; yield (batch, padding)."""
+		if not len(starts):
+			raise ValueError('Replay dataset has no valid training windows')
+		order = rng.permutation(starts)
+		physical = self.chronological_indices()
+		for offset in range(0, len(order), self.cfg.batch_size):
+			batch_starts = order[offset:offset + self.cfg.batch_size]
+			padding = self.cfg.batch_size - len(batch_starts)
+			if padding:
+				batch_starts = np.concatenate([batch_starts, rng.choice(starts, size=padding)])
+			indices = torch.from_numpy(batch_starts[:, None] + np.arange(self.cfg.horizon + 1))
+			td = self._buffer[physical[indices.reshape(-1)]].view(-1, self.cfg.horizon + 1).permute(1, 0)
+			yield self._prepare_batch(td), padding

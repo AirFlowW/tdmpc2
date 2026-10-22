@@ -46,6 +46,8 @@ def train(cfg: dict):
 	"""
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
+	if cfg.task != 'dot-avoidance' and (cfg.save_replay_buffer or cfg.pretrain_data_path):
+		raise ValueError('Replay export and pretraining currently support dot-avoidance only')
 	configure_device(cfg)
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)

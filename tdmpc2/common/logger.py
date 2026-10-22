@@ -134,6 +134,9 @@ class Logger:
 		)
 		print(colored("Logs will be synced with wandb.", "blue", attrs=["bold"]))
 		self._wandb = wandb
+		for category, axis in (("train", "step"), ("eval", "step"), ("pretrain", "iteration")):
+			wandb.define_metric(f"{category}/{axis}")
+			wandb.define_metric(f"{category}/*", step_metric=f"{category}/{axis}")
 		self._video = (
 			VideoRecorder(cfg, self._wandb)
 			if self._wandb and cfg.save_video
@@ -220,14 +223,11 @@ class Logger:
 	def log(self, d, category="train"):
 		assert category in CAT_TO_COLOR.keys(), f"invalid category: {category}"
 		if self._wandb:
-			if category in {"train", "eval"}:
-				xkey = "step"
-			elif category == "pretrain":
-				xkey = "iteration"
 			_d = dict()
 			for k, v in d.items():
 				_d[category + "/" + k] = v
-			self._wandb.log(_d, step=d[xkey])
+			# W&B owns the monotonic history step; phases use their own metric axes.
+			self._wandb.log(_d)
 		local = {}
 		for key, value in d.items():
 			if hasattr(value, 'detach'):

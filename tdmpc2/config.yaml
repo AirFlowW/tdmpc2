@@ -99,6 +99,10 @@ vector_backend: auto
 frame_stack: 3
 updates_per_transition: 1.0
 buffer_device: auto
+# Optional portable replay snapshots and offline epochs before dot-avoidance collection.
+save_replay_buffer: false
+pretrain_data_path: null
+pretrain_epochs: 1
 dot:
     predictable: false
     partial_obs: false

@@ -377,7 +377,11 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			dict: Dictionary of training statistics.
 		"""
-		obs, action, reward, terminated, task = buffer.sample()
+		return self.update_batch(buffer.sample())
+
+	def update_batch(self, batch):
+		"""Run the same learner update on an explicitly prepared replay batch."""
+		obs, action, reward, terminated, task = batch
 		kwargs = {}
 		if task is not None:
 			kwargs["task"] = task
