@@ -8,10 +8,10 @@ exp_name: dot_avoidance_fast
 model_size: 1
 num_channels: 8
 
-# Shorter runs and less learning work per collected transition.
+# Shorter runs and smaller learner batches.
 steps: 100000
 batch_size: 64
-updates_per_transition: 0.25
+updates_per_transition: 1.0
 buffer_size: 20000
 
 # Smaller MPC search.
