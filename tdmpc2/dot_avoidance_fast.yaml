@@ -22,6 +22,6 @@ num_elites: 8
 num_pi_trajs: 8
 
 # Lower evaluation cost.
-eval_episodes: 2
+eval_episodes: 8
 eval_freq: 10000
 save_video: false

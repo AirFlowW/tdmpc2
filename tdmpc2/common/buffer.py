@@ -104,7 +104,9 @@ class Buffer():
 		Prepare a sampled batch for training (post-processing).
 		Expects `td` to be a TensorDict with batch size TxB.
 		"""
-		td = td.select("obs", "action", "reward", "terminated", "task", strict=False).to(self._device, non_blocking=True)
+		# MPS async copies can outlive temporary CPU batches and read freed storage.
+		td = td.select("obs", "action", "reward", "terminated", "task", strict=False).to(
+			self._device, non_blocking=self._device.type == 'cuda')
 		obs = td.get('obs').contiguous()
 		action = td.get('action')[1:].contiguous()
 		reward = td.get('reward')[1:].unsqueeze(-1).contiguous()
