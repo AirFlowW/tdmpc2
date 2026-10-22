@@ -102,9 +102,9 @@ buffer_device: auto
 dot:
     predictable: false
     partial_obs: false
-    num_obstacles: 10
+    num_obstacles: 4
     boundary_mode: wrap
-    image_size: 64
+    image_size: 32
     dot_radius: 2
     agent_speed: 2.0
     obstacle_speed: 2.0
