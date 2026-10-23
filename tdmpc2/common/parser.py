@@ -1,5 +1,6 @@
 import dataclasses
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,19 @@ import hydra
 from omegaconf import OmegaConf
 
 from common import MODEL_SIZE, TASK_SET
+
+
+def create_run_dir(base_dir):
+	"""Reserve a unique local-time run directory, including simultaneous starts."""
+	stamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+	index = 0
+	while True:
+		path = base_dir / (stamp if index == 0 else f'{stamp}_{index}')
+		try:
+			path.mkdir(parents=True, exist_ok=False)
+			return path
+		except FileExistsError:
+			index += 1
 
 
 def cfg_to_dataclass(cfg, frozen=False):
@@ -54,7 +68,8 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 			pass
 
 	# Convenience
-	cfg.work_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
+	base_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
+	cfg.work_dir = create_run_dir(base_dir)
 	cfg.task_title = cfg.task.replace("-", " ").title()
 	cfg.bin_size = (cfg.vmax - cfg.vmin) / (cfg.num_bins-1) # Bin size for discrete regression
 
