@@ -1,7 +1,8 @@
 """Adapt the root Gymnasium environment to TD-MPC2's scalar API."""
 
 import gymnasium as gym
-from environments.tdmpc2 import configure, make_dot_env
+from environments.tdmpc2 import configure, make_task_env
+from environments.tasks import task_settings
 
 
 class DotAdapter(gym.Wrapper):
@@ -25,6 +26,6 @@ class DotAdapter(gym.Wrapper):
 
 
 def make_env(cfg):
-    env = make_dot_env(cfg.dot, cfg.obs, cfg.frame_stack)
+    env = make_task_env(cfg.task, task_settings(cfg), cfg.obs, cfg.frame_stack)
     configure(cfg, env)
     return DotAdapter(env, cfg.seed)

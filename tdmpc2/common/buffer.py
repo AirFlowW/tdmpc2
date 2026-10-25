@@ -91,7 +91,15 @@ class Buffer():
 	def add(self, td):
 		"""Add an episode to the buffer."""
 		if len(td) < self.cfg.horizon + 1:
-			return self._num_eps
+			if (self.cfg.get('episodic', False) and len(td) > 1
+					and bool(td['terminated'][-1])):
+				padding = td[-1:].clone().expand(self.cfg.horizon + 1 - len(td)).clone()
+				padding['action'].zero_()
+				padding['reward'].zero_()
+				padding['terminated'].fill_(1)
+				td = torch.cat([td, padding])
+			else:
+				return self._num_eps
 		self._valid_episodes += 1
 		td['episode'] = torch.full_like(td['reward'], self._num_eps, dtype=torch.int64)
 		if self._num_eps == 0:
@@ -145,8 +153,6 @@ class Buffer():
 	def load_dataset(self, path):
 		"""Load all rows without discarding short fragments or changing field values."""
 		from common.replay_dataset import iter_dataset_chunks, read_manifest
-		if self.cfg.task != 'dot-avoidance':
-			raise ValueError('Replay datasets currently support dot-avoidance only')
 		if hasattr(self, '_buffer') and len(self._buffer):
 			raise ValueError('Replay datasets must be loaded into an empty buffer')
 		manifest = read_manifest(path, self.cfg, self.capacity)

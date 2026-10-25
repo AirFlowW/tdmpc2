@@ -19,6 +19,7 @@ from trainer.offline_trainer import OfflineTrainer
 from trainer.online_trainer import OnlineTrainer
 from common.device import configure_device
 from common.logger import Logger
+from environments.tasks import TASKS
 
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
@@ -46,13 +47,13 @@ def train(cfg: dict):
 	"""
 	assert cfg.steps > 0, 'Must train for at least 1 step.'
 	cfg = parse_cfg(cfg)
-	if cfg.task != 'dot-avoidance' and (cfg.save_replay_buffer or cfg.pretrain_data_path):
-		raise ValueError('Replay export and pretraining currently support dot-avoidance only')
+	if cfg.task not in TASKS and (cfg.save_replay_buffer or cfg.pretrain_data_path):
+		raise ValueError('Replay export and pretraining require a registered environment')
 	configure_device(cfg)
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
-	if cfg.task == 'dot-avoidance':
+	if cfg.task in TASKS:
 		from trainer.vector_trainer import VectorTrainer
 		from environments.tdmpc2 import make_vector_env
 		env = make_vector_env(cfg)
@@ -70,7 +71,7 @@ def train(cfg: dict):
 		)
 		trainer.train()
 	finally:
-		if cfg.task == 'dot-avoidance':
+		if cfg.task in TASKS:
 			env.close()
 	print('\nTraining completed successfully')
 

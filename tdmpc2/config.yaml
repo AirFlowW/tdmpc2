@@ -114,3 +114,14 @@ dot:
     agent_speed: 2.0
     obstacle_speed: 2.0
     max_episode_steps: 500
+navigation:
+    image_size: 64
+    num_obstacles: 0
+    dot_radius: 2
+    goal_radius: 2
+    agent_speed: 2.0
+    obstacle_speed: 2.0
+    obstacle_noise_distance: 0.0
+    spawn_clearance: 5.0
+    partial_obs: false
+    max_episode_steps: 500

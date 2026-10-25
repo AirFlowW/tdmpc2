@@ -13,6 +13,7 @@ from common.parser import parse_cfg
 from common.seed import set_seed
 from envs import make_env
 from tdmpc2 import TDMPC2
+from environments.tasks import TASKS
 
 torch.backends.cudnn.benchmark = True
 
@@ -42,7 +43,7 @@ def evaluate(cfg: dict):
 	assert cfg.eval_episodes > 0, 'Must evaluate at least 1 episode.'
 	cfg = parse_cfg(cfg)
 	cfg.checkpoint = hydra.utils.to_absolute_path(cfg.checkpoint)
-	if cfg.task == 'dot-avoidance':
+	if cfg.task in TASKS:
 		import json
 		from environments.evaluate import evaluate_checkpoint
 

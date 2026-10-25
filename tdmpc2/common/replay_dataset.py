@@ -50,8 +50,8 @@ def _encode(arrays, rgb):
 
 def save_dataset(buffer, path, *, chunk_bytes=CHUNK_BYTES):
     """Publish a complete snapshot atomically; existing datasets are never replaced."""
-    if buffer.cfg.task != 'dot-avoidance':
-        raise ValueError('Replay datasets currently support dot-avoidance only')
+    from environments.tasks import replay_metadata
+    environment = replay_metadata(buffer.cfg)
     if chunk_bytes < 1:
         raise ValueError('chunk_bytes must be positive')
     path = Path(path).expanduser().absolute()
@@ -62,7 +62,7 @@ def save_dataset(buffer, path, *, chunk_bytes=CHUNK_BYTES):
     cfg = dataclasses.asdict(buffer.cfg) if dataclasses.is_dataclass(buffer.cfg) else vars(buffer.cfg)
     manifest = dict(format=FORMAT, version=VERSION, rows=0, fields={}, segments=[], shards=[],
                     num_episodes_added=buffer.num_eps,
-                    source_config=json.loads(json.dumps(cfg, default=str)))
+                    source_config=json.loads(json.dumps(cfg, default=str)), environment=environment)
     try:
         indices = buffer.chronological_indices()
         if len(indices):
@@ -115,6 +115,25 @@ def read_manifest(path, cfg, capacity):
         source = manifest['source_config']
         if source['task'] != cfg.task or source['obs'] != cfg.obs:
             raise ValueError('Replay task or observation mode is incompatible with this run')
+        from types import SimpleNamespace
+        from environments.tasks import replay_metadata
+        target_environment = replay_metadata(cfg)
+        # Version-one avoidance snapshots predate explicit environment metadata.
+        source_environment = manifest.get('environment')
+        if source_environment is None:
+            if source['task'] != 'dot-avoidance':
+                raise ValueError('Replay dataset is missing environment schema metadata')
+            class LegacyConfig(SimpleNamespace):
+                def get(self, key, default=None):
+                    return getattr(self, key, default)
+            source_environment = replay_metadata(LegacyConfig(**source))
+        if not isinstance(source_environment, dict) or not isinstance(source_environment.get('settings'), dict):
+            raise ValueError('Invalid replay environment metadata')
+        for key in ('task', 'observation_schema', 'action_schema', 'reward_semantics'):
+            if source_environment.get(key) != target_environment[key]:
+                raise ValueError(f'Incompatible replay environment schema: {key}')
+        if source_environment.get('terminal_padding') not in {'none', 'absorbing-v1'}:
+            raise ValueError('Unknown replay terminal padding convention')
         if cfg.obs == 'rgb' and source['frame_stack'] != cfg.frame_stack:
             raise ValueError('Replay frame_stack is incompatible with this run')
         expected = dict(obs=(cfg.obs_shape[cfg.obs], 'uint8' if cfg.obs == 'rgb' else 'float32'),
@@ -155,9 +174,9 @@ def read_manifest(path, cfg, capacity):
             raise ValueError('Replay dataset has no valid training windows for this horizon')
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise ValueError(f'Cannot load replay dataset {path}: {exc}') from exc
-    if source.get('dot') != cfg.dot:
+    if source_environment['settings'] != target_environment['settings']:
         # Training suppresses Python warnings globally, so report transfer settings explicitly.
-        print('Replay source environment differs from the current dot settings; '
+        print('Replay source environment differs from the current environment settings; '
               'pretraining will use the stored observations and rewards.')
     return manifest
 
