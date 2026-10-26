@@ -60,7 +60,8 @@ def make_env(cfg):
 	Make an environment for TD-MPC2 experiments.
 	"""
 	gym.logger.set_level(40)
-	if cfg.task == 'dot-avoidance':
+	from environments.tasks import TASKS
+	if cfg.task in TASKS:
 		from envs.dot_avoidance import make_env as make_dot_env
 		return TensorWrapper(make_dot_env(cfg))
 	if cfg.multitask:

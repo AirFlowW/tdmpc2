@@ -1,0 +1,7 @@
+defaults:
+  - dot_navigation
+  - _self_
+
+exp_name: dot_navigation_partial
+navigation:
+  partial_obs: true

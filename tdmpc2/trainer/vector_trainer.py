@@ -10,15 +10,16 @@ from hydra.utils import to_absolute_path
 from tqdm import tqdm
 
 from common.device import mark_step
-from environments.evaluation import TDMPCPolicy, evaluate_conditions, training_metrics
+from environments.evaluation import TDMPCPolicy, evaluate_conditions, training_metrics, episode_metrics
+from environments.tasks import task_settings
 from trainer.base import Trainer
 
 
-def transition(obs, action=None, reward=float('nan'), terminated=float('nan')):
+def transition(obs, action=None, reward=float('nan'), terminated=float('nan'), *, action_dim=2):
     """Incoming action/reward belong to the observation in the same row."""
     return TensorDict(dict(
         obs=torch.as_tensor(np.array(obs, copy=True)).unsqueeze(0),
-        action=(torch.full((2,), float('nan')) if action is None else torch.as_tensor(action, dtype=torch.float32).clone()).unsqueeze(0),
+        action=(torch.full((action_dim,), float('nan')) if action is None else torch.as_tensor(action, dtype=torch.float32).clone()).unsqueeze(0),
         reward=torch.tensor([reward], dtype=torch.float32),
         terminated=torch.tensor([terminated], dtype=torch.float32),
     ), batch_size=[1])
@@ -47,11 +48,12 @@ class VectorTrainer(Trainer):
                     collection_steps_per_second=self._step / max(self._collection_time, 1e-9))
 
     def eval(self):
+        settings = task_settings(self.cfg)
         results = evaluate_conditions(
-            self.cfg.dot, self.cfg.obs, self.cfg.frame_stack, TDMPCPolicy(self.agent),
+            settings, self.cfg.obs, self.cfg.frame_stack, TDMPCPolicy(self.agent),
             self.cfg.eval_episodes, self.cfg.seed + 1_000_000,
-            video=self.logger.video, video_step=self._step)
-        return training_metrics(results, self.cfg.dot.get('partial_obs', False))
+            video=self.logger.video, video_step=self._step, task=self.cfg.task)
+        return training_metrics(results, settings.get('partial_obs', False))
 
     def _flush(self):
         for rows in self._tds:
@@ -96,7 +98,7 @@ class VectorTrainer(Trainer):
         cfg = self.cfg
         if cfg.steps < 1 or cfg.horizon < 1 or cfg.eval_freq < 1 or cfg.eval_episodes < 1:
             raise ValueError('steps, horizon, eval_freq, and eval_episodes must be positive')
-        if cfg.dot['max_episode_steps'] < cfg.horizon:
+        if cfg.episode_length < cfg.horizon:
             raise ValueError('Episode length must be at least the replay horizon')
         if cfg.buffer_size < cfg.horizon + 1 or (not cfg.get('pretrain_data_path') and cfg.steps < cfg.horizon + 1):
             raise ValueError('steps and buffer_size must hold at least horizon+1 replay rows')
@@ -108,7 +110,7 @@ class VectorTrainer(Trainer):
         try:
             self._pretrain()
             obs, _ = self.env.reset(seed=[cfg.seed + i for i in range(cfg.num_envs)])
-            self._tds = [[transition(o)] for o in obs]
+            self._tds = [[transition(o, action_dim=cfg.action_dim)] for o in obs]
             reset_mask = np.ones(cfg.num_envs, dtype=bool)
             self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
             while self._step < cfg.steps:
@@ -116,7 +118,7 @@ class VectorTrainer(Trainer):
                 start = perf_counter()
                 mark_step(self.agent.device)
                 actions = (self.agent.act_batch(obs, reset_mask).numpy() if learning else
-                           self._action_rng.uniform(-1, 1, (cfg.num_envs, 2)).astype(np.float32))
+                           self._action_rng.uniform(-1, 1, (cfg.num_envs, cfg.action_dim)).astype(np.float32))
                 self._planning_time += perf_counter() - start
                 start = perf_counter()
                 next_obs, rewards, terminated, truncated, infos = self.env.step(actions)
@@ -130,11 +132,10 @@ class VectorTrainer(Trainer):
                     if dones[i]:
                         info = infos['final_info'][i]
                         self.buffer.add(torch.cat(self._tds[i]))
-                        finished.append(dict(episode_reward=sum(float(row['reward'][0]) for row in self._tds[i][1:]),
-                                             collision_step_rate=info['collision_steps'] / info['elapsed_steps'],
-                                             collision_free_episode_fraction=info['success'],
-                                             episode_success=info['success'], episode_length=info['elapsed_steps']))
-                        self._tds[i] = [transition(next_obs[i])]
+                        finished.append(episode_metrics(info,
+                            sum(float(row['reward'][0]) for row in self._tds[i][1:]),
+                            info['elapsed_steps'], cfg.task))
+                        self._tds[i] = [transition(next_obs[i], action_dim=cfg.action_dim)]
                 if learning:
                     credit += cfg.num_envs * cfg.updates_per_transition
                     while credit >= 1:
