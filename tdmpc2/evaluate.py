@@ -17,7 +17,7 @@ from tdmpc2 import TDMPC2
 torch.backends.cudnn.benchmark = True
 
 
-@hydra.main(config_name='config', config_path='.')
+@hydra.main(config_name='config', config_path='config')
 def evaluate(cfg: dict):
 	"""
 	Script for evaluating a single-task / multi-task TD-MPC2 checkpoint.
@@ -30,7 +30,7 @@ def evaluate(cfg: dict):
 		`save_video`: whether to save a video of the evaluation (default: True)
 		`seed`: random seed (default: 1)
 	
-	See config.yaml for a full list of args.
+	See config/config.yaml for a full list of args.
 
 	Example usage:
 	````

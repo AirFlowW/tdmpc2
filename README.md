@@ -105,11 +105,11 @@ $ python evaluate.py task=mt30 model_size=317 checkpoint=/path/to/mt30-317M.pt
 $ python evaluate.py task=dog-run checkpoint=/path/to/dog-1.pt save_video=true
 ```
 
-All single-task checkpoints expect `model_size=5`. Multi-task checkpoints are available in multiple model sizes. Available arguments are `model_size={1, 5, 19, 48, 317}`. Note that single-task evaluation of multi-task checkpoints is currently not supported. See `config.yaml` for a full list of arguments.
+All single-task checkpoints expect `model_size=5`. Multi-task checkpoints are available in multiple model sizes. Available arguments are `model_size={1, 5, 19, 48, 317}`. Note that single-task evaluation of multi-task checkpoints is currently not supported. See `tdmpc2/config/config.yaml` for a full list of arguments.
 
 ### Training
 
-See below examples on how to train TD-MPC**2** on a single task (online RL) and on multi-task datasets (offline RL). We recommend configuring [Weights and Biases](https://wandb.ai) (`wandb`) in `config.yaml` to track training progress.
+See below examples on how to train TD-MPC**2** on a single task (online RL) and on multi-task datasets (offline RL). We recommend configuring [Weights and Biases](https://wandb.ai) (`wandb`) in `tdmpc2/config/config.yaml` to track training progress.
 
 ```
 $ python train.py task=mt80 model_size=48 batch_size=1024
@@ -118,7 +118,7 @@ $ python train.py task=dog-run steps=7000000
 $ python train.py task=walker-walk obs=rgb
 ```
 
-We recommend using default hyperparameters for single-task online RL, including the default model size of 5M parameters (`model_size=5`). Multi-task offline RL benefits from a larger model size, but larger models are also increasingly costly to train and evaluate. Available arguments are `model_size={1, 5, 19, 48, 317}`. See `config.yaml` for a full list of arguments.
+We recommend using default hyperparameters for single-task online RL, including the default model size of 5M parameters (`model_size=5`). Multi-task offline RL benefits from a larger model size, but larger models are also increasingly costly to train and evaluate. Available arguments are `model_size={1, 5, 19, 48, 317}`. See `tdmpc2/config/config.yaml` for a full list of arguments.
 
 ----
 

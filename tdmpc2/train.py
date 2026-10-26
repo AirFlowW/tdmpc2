@@ -24,7 +24,7 @@ torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
 
-@hydra.main(config_name='config', config_path='.')
+@hydra.main(config_name='config', config_path='config')
 def train(cfg: dict):
 	"""
 	Script for training single-task / multi-task TD-MPC2 agents.
@@ -35,7 +35,7 @@ def train(cfg: dict):
 		`steps`: number of training/environment steps (default: 10M)
 		`seed`: random seed (default: 1)
 
-	See config.yaml for a full list of args.
+	See config/config.yaml for a full list of args.
 
 	Example usage:
 	```
