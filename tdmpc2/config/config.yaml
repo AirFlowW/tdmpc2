@@ -10,6 +10,14 @@ episodic: false
 checkpoint: ???
 eval_episodes: 10
 eval_freq: 50000
+# Optional standard latent diagnostics and plots at each dot-task evaluation.
+# Uses the configured training visibility; expensive analysis extras stay off.
+latent_analysis:
+    enabled: false
+    episodes_per_policy: 6
+    max_steps: 250
+    horizon: 3
+    seed: null  # null selects training seed + 2,000,000
 
 # training
 steps: 10_000_000

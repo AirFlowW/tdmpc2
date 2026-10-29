@@ -50,6 +50,8 @@ def train(cfg: dict):
 	cfg = parse_cfg(cfg)
 	if cfg.task not in TASKS and (cfg.save_replay_buffer or cfg.pretrain_data_path):
 		raise ValueError('Replay export and pretraining require a registered environment')
+	if cfg.task not in TASKS and cfg.latent_analysis['enabled']:
+		raise ValueError('Training latent analysis requires a registered dot environment')
 	configure_device(cfg)
 	set_seed(cfg.seed)
 	print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)

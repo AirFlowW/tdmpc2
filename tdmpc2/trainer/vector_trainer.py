@@ -38,6 +38,7 @@ class VectorTrainer(Trainer):
         self._pretrain_updates = 0
         self._pretrain_seconds = 0.0
         self._stop_requested = False
+        self._latent_evaluator = None
 
     def request_stop(self):
         """Finish at a training boundary, preserving the final model and logs."""
@@ -58,7 +59,13 @@ class VectorTrainer(Trainer):
             settings, self.cfg.obs, self.cfg.frame_stack, TDMPCPolicy(self.agent),
             self.cfg.eval_episodes, self.cfg.seed + 1_000_000,
             video=self.logger.video, video_step=self._step, task=self.cfg.task)
-        return training_metrics(results, settings.get('partial_obs', False))
+        metrics = training_metrics(results, settings.get('partial_obs', False))
+        if self.cfg.get('latent_analysis', {}).get('enabled', False):
+            if self._latent_evaluator is None:
+                from latent_analysis.training import TrainingLatentAnalysis
+                self._latent_evaluator = TrainingLatentAnalysis(self.cfg, self.logger)
+            metrics.update(self._latent_evaluator.evaluate(self.agent, self._step))
+        return metrics
 
     def _flush(self):
         for rows in self._tds:

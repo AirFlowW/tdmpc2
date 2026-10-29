@@ -171,6 +171,15 @@ class Logger:
 		if self._wandb:
 			self._wandb.finish()
 
+	def log_latent_figures(self, figures, step):
+		"""Mirror selected locally saved plots using the evaluation metric axis."""
+		if self._wandb:
+			self._wandb.log({
+				'eval/step': step,
+				**{f'eval/latent/figures/{name}': self._wandb.Image(str(path))
+					for name, path in figures.items()},
+			})
+
 	def _format(self, key, value, ty):
 		if ty == "int":
 			return f'{colored(key+":", "blue")} {int(value):,}'
