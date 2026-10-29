@@ -27,6 +27,7 @@ class TDMPC2(torch.nn.Module):
 		if cfg.channels_last:
 			# Set convolution strides before optimizer creation and CUDA graph capture.
 			self.model._encoder.to(memory_format=torch.channels_last)
+		# Disabled uses None: fused=False also changes PyTorch's default foreach selection.
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
 			{'params': self.model._dynamics.parameters()},
@@ -35,8 +36,11 @@ class TDMPC2(torch.nn.Module):
 			{'params': self.model._Qs.parameters()},
 			{'params': self.model._task_emb.parameters() if self.cfg.multitask else []
 			 }
-		], lr=self.cfg.lr, capturable=self.device.type == 'cuda', foreach=False if self.device.type != 'cuda' else None)
-		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=self.device.type == 'cuda', foreach=False if self.device.type != 'cuda' else None)
+		], lr=self.cfg.lr, capturable=self.device.type == 'cuda', fused=True if cfg.fused_optimizer else None,
+			foreach=False if self.device.type != 'cuda' else None)
+		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5,
+			capturable=self.device.type == 'cuda', fused=True if cfg.fused_optimizer else None,
+			foreach=False if self.device.type != 'cuda' else None)
 		self.model.eval()
 		self.scale = RunningScale(cfg)
 		self.cfg.iterations += 2*int(cfg.action_dim >= 20) # Heuristic for large action spaces

@@ -10,6 +10,7 @@ buffer_size: 100000
 buffer_device: auto
 mixed_precision: true
 channels_last: true
+fused_optimizer: true
 enable_wandb: true
 wandb_project: dot-avoidance
 wandb_entity: ObsInWM

@@ -30,11 +30,13 @@ def configure_device(cfg):
     cfg.mixed_precision = mixed_precision
     cfg.channels_last = bool(cfg.get("channels_last", False) and cfg.obs == "rgb"
                              and device.type == "cuda")
+    cfg.fused_optimizer = bool(cfg.get("fused_optimizer", False) and device.type == "cuda")
     if cfg.get("cpu_threads", None):
         torch.set_num_threads(cfg.cpu_threads)
     precision = "BF16 mixed precision" if cfg.mixed_precision else "FP32"
     print(f"Learner device: {device}; compile: {cfg.compile}; "
-          f"updates: {precision}; channels_last: {cfg.channels_last}")
+          f"updates: {precision}; channels_last: {cfg.channels_last}; "
+          f"fused_optimizer: {cfg.fused_optimizer}")
     return device
 
 

@@ -111,6 +111,7 @@ buffer_device: auto
 # CUDA learner optimizations; enabled by the dot environment presets.
 mixed_precision: false
 channels_last: false
+fused_optimizer: false
 # Optional portable replay snapshots and offline epochs before dot-avoidance collection.
 save_replay_buffer: false
 pretrain_data_path: null
