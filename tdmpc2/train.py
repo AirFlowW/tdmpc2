@@ -1,4 +1,5 @@
 import os
+import signal
 os.environ['MUJOCO_GL'] = os.getenv("MUJOCO_GL", 'egl')
 os.environ['LAZY_LEGACY_OP'] = '0'
 os.environ['TORCHDYNAMO_INLINE_INBUILT_NN_MODULES'] = "1"
@@ -69,7 +70,15 @@ def train(cfg: dict):
 			buffer=Buffer(cfg),
 			logger=Logger(cfg),
 		)
-		trainer.train()
+		stop_signal = getattr(signal, 'SIGUSR1', None)
+		previous_handler = None
+		if cfg.task in TASKS and stop_signal is not None:
+			previous_handler = signal.signal(stop_signal, lambda signum, frame: trainer.request_stop())
+		try:
+			trainer.train()
+		finally:
+			if previous_handler is not None:
+				signal.signal(stop_signal, previous_handler)
 	finally:
 		if cfg.task in TASKS:
 			env.close()

@@ -24,6 +24,9 @@ class TDMPC2(torch.nn.Module):
 		if cfg.iterations < 1 or cfg.horizon < 1:
 			raise ValueError('iterations and horizon must be positive')
 		self.model = WorldModel(cfg).to(self.device)
+		if cfg.channels_last:
+			# Set convolution strides before optimizer creation and CUDA graph capture.
+			self.model._encoder.to(memory_format=torch.channels_last)
 		self.optim = torch.optim.Adam([
 			{'params': self.model._encoder.parameters(), 'lr': self.cfg.lr*self.cfg.enc_lr_scale},
 			{'params': self.model._dynamics.parameters()},
@@ -252,14 +255,15 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			float: Loss of the policy update.
 		"""
-		action, info = self.model.pi(zs, task)
-		qs = self.model.Q(zs, action, task, return_type='avg', detach=True)
-		self.scale.update(qs[0])
-		qs = self.scale(qs)
+		with torch.autocast('cuda', dtype=torch.bfloat16, enabled=self.cfg.mixed_precision):
+			action, info = self.model.pi(zs, task)
+			qs = self.model.Q(zs, action, task, return_type='avg', detach=True)
+			self.scale.update(qs[0])
+			qs = self.scale(qs)
 
-		# Loss is a weighted sum of Q-values
-		rho = torch.pow(self.cfg.rho, torch.arange(len(qs), device=self.device))
-		pi_loss = (-(self.cfg.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1,2)) * rho).mean()
+			# Loss is a weighted sum of Q-values
+			rho = torch.pow(self.cfg.rho, torch.arange(len(qs), device=self.device))
+			pi_loss = (-(self.cfg.entropy_coef * info["scaled_entropy"] + qs).mean(dim=(1,2)) * rho).mean()
 		pi_loss.backward()
 		pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
 		self.pi_optim.step()
@@ -293,51 +297,52 @@ class TDMPC2(torch.nn.Module):
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
 	def _update(self, obs, action, reward, terminated, task=None):
-		# Compute targets
-		with torch.no_grad():
-			next_z = self.model.encode(obs[1:], task)
-			td_targets = self._td_target(next_z, reward, terminated, task)
+		with torch.autocast('cuda', dtype=torch.bfloat16, enabled=self.cfg.mixed_precision):
+			# Compute targets
+			with torch.no_grad():
+				next_z = self.model.encode(obs[1:], task)
+				td_targets = self._td_target(next_z, reward, terminated, task)
 
-		# Prepare for update
-		self.model.train()
+			# Prepare for update
+			self.model.train()
 
-		# Latent rollout
-		zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
-		z = self.model.encode(obs[0], task)
-		zs[0] = z
-		consistency_loss = 0
-		for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
-			z = self.model.next(z, _action, task)
-			consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
-			zs[t+1] = z
+			# Latent rollout
+			zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
+			z = self.model.encode(obs[0], task)
+			zs[0] = z
+			consistency_loss = 0
+			for t, (_action, _next_z) in enumerate(zip(action.unbind(0), next_z.unbind(0))):
+				z = self.model.next(z, _action, task)
+				consistency_loss = consistency_loss + F.mse_loss(z, _next_z) * self.cfg.rho**t
+				zs[t+1] = z
 
-		# Predictions
-		_zs = zs[:-1]
-		qs = self.model.Q(_zs, action, task, return_type='all')
-		reward_preds = self.model.reward(_zs, action, task)
-		if self.cfg.episodic:
-			termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
+			# Predictions
+			_zs = zs[:-1]
+			qs = self.model.Q(_zs, action, task, return_type='all')
+			reward_preds = self.model.reward(_zs, action, task)
+			if self.cfg.episodic:
+				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
 
-		# Compute losses
-		reward_loss, value_loss = 0, 0
-		for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
-			reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
-			for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
-				value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
+			# Compute losses
+			reward_loss, value_loss = 0, 0
+			for t, (rew_pred_unbind, rew_unbind, td_targets_unbind, qs_unbind) in enumerate(zip(reward_preds.unbind(0), reward.unbind(0), td_targets.unbind(0), qs.unbind(1))):
+				reward_loss = reward_loss + math.soft_ce(rew_pred_unbind, rew_unbind, self.cfg).mean() * self.cfg.rho**t
+				for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
+					value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
 
-		consistency_loss = consistency_loss / self.cfg.horizon
-		reward_loss = reward_loss / self.cfg.horizon
-		if self.cfg.episodic:
-			termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
-		else:
-			termination_loss = 0.
-		value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
-		total_loss = (
-			self.cfg.consistency_coef * consistency_loss +
-			self.cfg.reward_coef * reward_loss +
-			self.cfg.termination_coef * termination_loss +
-			self.cfg.value_coef * value_loss
-		)
+			consistency_loss = consistency_loss / self.cfg.horizon
+			reward_loss = reward_loss / self.cfg.horizon
+			if self.cfg.episodic:
+				termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
+			else:
+				termination_loss = 0.
+			value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+			total_loss = (
+				self.cfg.consistency_coef * consistency_loss +
+				self.cfg.reward_coef * reward_loss +
+				self.cfg.termination_coef * termination_loss +
+				self.cfg.value_coef * value_loss
+			)
 
 		# Update model
 		total_loss.backward()

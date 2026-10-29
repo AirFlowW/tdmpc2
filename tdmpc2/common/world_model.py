@@ -153,7 +153,8 @@ class WorldModel(nn.Module):
 			z = self.task_emb(z, task)
 
 		# Gaussian policy prior
-		mean, log_std = self._pi(z).chunk(2, dim=-1)
+		# Gaussian probabilities and squashing need FP32 under BF16 autocast.
+		mean, log_std = self._pi(z).float().chunk(2, dim=-1)
 		log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
 		eps = torch.randn_like(mean)
 

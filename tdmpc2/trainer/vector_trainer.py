@@ -37,6 +37,11 @@ class VectorTrainer(Trainer):
         self._pretrained = False
         self._pretrain_updates = 0
         self._pretrain_seconds = 0.0
+        self._stop_requested = False
+
+    def request_stop(self):
+        """Finish at a training boundary, preserving the final model and logs."""
+        self._stop_requested = True
 
     def metrics(self):
         elapsed = perf_counter() - self._start
@@ -113,7 +118,7 @@ class VectorTrainer(Trainer):
             self._tds = [[transition(o, action_dim=cfg.action_dim)] for o in obs]
             reset_mask = np.ones(cfg.num_envs, dtype=bool)
             self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
-            while self._step < cfg.steps:
+            while self._step < cfg.steps and not self._stop_requested:
                 learning = (self._pretrained or self._step >= cfg.seed_steps) and self.buffer.ready
                 start = perf_counter()
                 mark_step(self.agent.device)
@@ -138,7 +143,7 @@ class VectorTrainer(Trainer):
                         self._tds[i] = [transition(next_obs[i], action_dim=cfg.action_dim)]
                 if learning:
                     credit += cfg.num_envs * cfg.updates_per_transition
-                    while credit >= 1:
+                    while credit >= 1 and not self._stop_requested:
                         start = perf_counter()
                         self._last_metrics = self.agent.update(self.buffer)
                         self._update_time += perf_counter() - start
@@ -150,13 +155,15 @@ class VectorTrainer(Trainer):
                 # Entering learned control from warmup also needs fresh planner histories.
                 reset_mask = dones if learning else np.ones(cfg.num_envs, dtype=bool)
                 obs = next_obs
-                if self._step >= next_eval:
+                if self._step >= next_eval and not self._stop_requested:
                     self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
                     self.logger.save_agent(self.agent, identifier=str(self._step))
                     next_eval = (self._step // cfg.eval_freq + 1) * cfg.eval_freq
             self._flush()
-            self.logger.log(dict(self._last_metrics, **self.metrics()), 'train')
-            self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
+            self.logger.log(dict(self._last_metrics, **self.metrics(),
+                                 stopped_early=self._stop_requested), 'train')
+            if not self._stop_requested:
+                self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
             try:
                 if cfg.get('save_replay_buffer', False):
                     path = cfg.work_dir / 'replay'

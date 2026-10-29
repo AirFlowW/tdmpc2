@@ -23,9 +23,18 @@ def configure_device(cfg):
     device = resolve_device(cfg.get("device", "auto"))
     cfg.device = str(device)
     cfg.compile = bool(cfg.compile and device.type == "cuda")
+    mixed_precision = bool(cfg.get("mixed_precision", False) and device.type == "cuda")
+    if mixed_precision:
+        with torch.cuda.device(device):
+            mixed_precision = torch.cuda.is_bf16_supported(including_emulation=False)
+    cfg.mixed_precision = mixed_precision
+    cfg.channels_last = bool(cfg.get("channels_last", False) and cfg.obs == "rgb"
+                             and device.type == "cuda")
     if cfg.get("cpu_threads", None):
         torch.set_num_threads(cfg.cpu_threads)
-    print(f"Learner device: {device}; compile: {cfg.compile}")
+    precision = "BF16 mixed precision" if cfg.mixed_precision else "FP32"
+    print(f"Learner device: {device}; compile: {cfg.compile}; "
+          f"updates: {precision}; channels_last: {cfg.channels_last}")
     return device
 
 

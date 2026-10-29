@@ -67,6 +67,7 @@ simnorm_dim: 8
 wandb_project: ???
 wandb_entity: ???
 wandb_silent: false
+wandb_name: null
 enable_wandb: true
 save_csv: true
 
@@ -99,6 +100,9 @@ vector_backend: auto
 frame_stack: 3
 updates_per_transition: 1.0
 buffer_device: auto
+# CUDA learner optimizations; enabled by the dot environment presets.
+mixed_precision: false
+channels_last: false
 # Optional portable replay snapshots and offline epochs before dot-avoidance collection.
 save_replay_buffer: false
 pretrain_data_path: null

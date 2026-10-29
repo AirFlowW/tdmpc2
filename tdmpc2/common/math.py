@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 def soft_ce(pred, target, cfg):
 	"""Computes the cross entropy loss between predictions and soft targets."""
-	pred = F.log_softmax(pred, dim=-1)
+	pred = F.log_softmax(pred.float(), dim=-1)
 	target = two_hot(target, cfg)
 	return -(target * pred).sum(-1, keepdim=True)
 
@@ -73,6 +73,8 @@ def two_hot(x, cfg):
 
 def two_hot_inv(x, cfg):
 	"""Converts a batch of soft two-hot encoded vectors to scalars."""
+	# Preserve value-bin resolution and exponential decoding under autocast.
+	x = x.float()
 	if cfg.num_bins == 0:
 		return x
 	elif cfg.num_bins == 1:
