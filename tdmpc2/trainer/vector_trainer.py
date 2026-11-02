@@ -1,6 +1,7 @@
 """Parallel dot-world collection with one learner and trajectory-safe replay."""
 
 from time import perf_counter
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -78,30 +79,54 @@ class VectorTrainer(Trainer):
         if not self.cfg.get('pretrain_data_path'):
             return
         epochs = self.cfg.get('pretrain_epochs', 1)
-        if type(epochs) is not int or epochs < 1:
+        update_limit = self.cfg.get('pretrain_updates')
+        if update_limit is not None:
+            if type(update_limit) is not int or update_limit < 1:
+                raise ValueError('pretrain_updates must be a positive integer or null')
+        elif type(epochs) is not int or epochs < 1:
             raise ValueError('pretrain_epochs must be a positive integer')
         path = to_absolute_path(str(Path(self.cfg.pretrain_data_path).expanduser()))
         start = perf_counter()
         manifest = self.buffer.load_dataset(path)
+        sampling = self.cfg.get('pretrain_sampling', 'windows')
+        if sampling not in {'windows', 'transitions'}:
+            raise ValueError('pretrain_sampling must be windows or transitions')
         starts = self.buffer.valid_window_starts()
-        print(f'Pretraining on {manifest["rows"]:,} replay rows, {len(starts):,} windows '
-              f'for {epochs} epochs from {path}')
+        groups = self.buffer.transition_window_groups() if sampling == 'transitions' else None
+        window_count = sum(map(len, groups.values())) if groups is not None else len(starts)
+        batches_per_epoch = (sum((len(values) + self.cfg.batch_size - 1) // self.cfg.batch_size
+                                 for values in groups.values()) if groups is not None else
+                             (len(starts) + self.cfg.batch_size - 1) // self.cfg.batch_size)
+        if not batches_per_epoch:
+            raise ValueError('Replay dataset has no valid training windows')
+        if update_limit is not None:
+            epochs = (update_limit + batches_per_epoch - 1) // batches_per_epoch
+        budget = f'{update_limit:,} learner updates' if update_limit is not None else f'{epochs} epochs'
+        print(f'Pretraining on {manifest["rows"]:,} replay rows, {window_count:,} {sampling} windows '
+              f'for {budget} from {path}')
         rng = np.random.default_rng(self.cfg.seed + 200_000)
-        windows = padding_total = 0
+        windows = padding_total = transitions = 0
         for epoch in range(1, epochs + 1):
-            batches = self.buffer.iter_epoch_batches(starts, rng)
-            total = (len(starts) + self.cfg.batch_size - 1) // self.cfg.batch_size
+            if groups is not None:
+                batches = self.buffer.iter_transition_epoch_batches(groups, rng)
+            else:
+                batches = self.buffer.iter_epoch_batches(starts, rng)
+            total = (min(batches_per_epoch, update_limit - self._pretrain_updates)
+                     if update_limit is not None else batches_per_epoch)
+            # The last epoch can be partial; never perform an extra learner update.
+            batches = islice(batches, total)
             for batch_index, (batch, padding) in enumerate(tqdm(
                     batches, total=total, desc=f'Pretraining epoch {epoch}/{epochs}'), 1):
                 metrics = self.agent.update_batch(batch)
                 self._pretrain_updates += 1
-                windows += self.cfg.batch_size - padding
+                windows += batch[1].shape[1] - padding
+                transitions += batch[1].shape[0] * (batch[1].shape[1] - padding)
                 padding_total += padding
                 self._pretrain_seconds = perf_counter() - start
                 if self._pretrain_updates % 100 == 0 or batch_index == total:
                     self.logger.log(dict(metrics, epoch=epoch, iteration=self._pretrain_updates,
-                                         updates=self._pretrain_updates, valid_windows=len(starts),
-                                         windows=windows, padding=padding_total,
+                                         updates=self._pretrain_updates, valid_windows=window_count, sampling=sampling,
+                                         windows=windows, transitions=transitions, padding=padding_total,
                                          elapsed_time=self._pretrain_seconds), 'pretrain')
         self._pretrained = True
         self.logger.save_agent(self.agent, identifier='pretrained')

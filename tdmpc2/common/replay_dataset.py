@@ -235,3 +235,68 @@ def iter_dataset_chunks(path, manifest):
                              batch_size=[count])
         except (OSError, KeyError, TypeError, ValueError, EOFError, BadZipFile) as exc:
             raise ValueError(f'Invalid replay shard {filename}: {exc}') from exc
+
+
+class ReplayDatasetWriter:
+    """Stream episode fragments into the portable format with bounded CPU memory."""
+
+    def __init__(self, path, cfg, *, chunk_bytes=CHUNK_BYTES, metadata=None):
+        from environments.tasks import replay_metadata
+        self.path = Path(path).expanduser().absolute()
+        if self.path.exists():
+            raise FileExistsError(f'Replay dataset already exists: {self.path}')
+        if chunk_bytes < 1:
+            raise ValueError('chunk_bytes must be positive')
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.staging = Path(tempfile.mkdtemp(prefix=f'.{self.path.name}-', dir=self.path.parent))
+        config = dataclasses.asdict(cfg) if dataclasses.is_dataclass(cfg) else vars(cfg)
+        self.manifest = dict(format=FORMAT, version=VERSION, rows=0, fields={}, segments=[], shards=[],
+                             num_episodes_added=0, source_config=json.loads(json.dumps(config, default=str)),
+                             environment=replay_metadata(cfg), collection=metadata or {})
+        self.chunk_bytes = chunk_bytes
+        self.rgb = cfg.obs == 'rgb'
+        self.pending, self.pending_bytes = [], 0
+
+    def __enter__(self):
+        return self
+
+    def append_episode(self, td):
+        if len(td) < 2:
+            raise ValueError('An episode fragment must contain a reset row and a transition')
+        td = td.select('obs', 'action', 'reward', 'terminated').to('cpu').clone()
+        episode = self.manifest['num_episodes_added']
+        td['episode'] = torch.full((len(td),), episode, dtype=torch.int64)
+        fields = {key: dict(dtype=value.numpy().dtype.str, shape=list(value.shape[1:]))
+                  for key, value in td.items()}
+        if self.manifest['fields'] and fields != self.manifest['fields']:
+            raise ValueError('Incompatible episode fields')
+        self.manifest['fields'] = fields
+        self.manifest['segments'].append(dict(start=self.manifest['rows'], length=len(td), episode=episode))
+        self.manifest['rows'] += len(td)
+        self.manifest['num_episodes_added'] += 1
+        self.pending.append(td)
+        self.pending_bytes += sum(value.numel() * value.element_size() for value in td.values())
+        if self.pending_bytes >= self.chunk_bytes:
+            self._flush()
+
+    def _flush(self):
+        if not self.pending:
+            return
+        td = torch.cat(self.pending)
+        encoded, encoding = _encode({key: value.numpy() for key, value in td.items()}, self.rgb)
+        filename = f'part-{len(self.manifest["shards"]):05d}.npz'
+        np.savez_compressed(self.staging / filename, **encoded)
+        self.manifest['shards'].append(dict(file=filename, start=self.manifest['rows'] - len(td),
+                                            rows=len(td), observation_encoding=encoding))
+        self.pending.clear()
+        self.pending_bytes = 0
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self._flush()
+                (self.staging / 'manifest.json').write_text(json.dumps(self.manifest, indent=2) + '\n')
+                os.rename(self.staging, self.path)
+        finally:
+            if self.staging.exists():
+                shutil.rmtree(self.staging)

@@ -116,6 +116,10 @@ fused_optimizer: false
 save_replay_buffer: false
 pretrain_data_path: null
 pretrain_epochs: 1
+# Optional exact learner-update budget; overrides pretrain_epochs when set.
+pretrain_updates: null
+# windows: overlapping full-horizon windows; transitions: exact once-per-epoch coverage.
+pretrain_sampling: windows
 dot:
     predictable: false
     partial_obs: false

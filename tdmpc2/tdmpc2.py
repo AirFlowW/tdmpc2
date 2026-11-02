@@ -301,6 +301,7 @@ class TDMPC2(torch.nn.Module):
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
 	def _update(self, obs, action, reward, terminated, task=None):
+		horizon, batch_size = action.shape[:2]
 		with torch.autocast('cuda', dtype=torch.bfloat16, enabled=self.cfg.mixed_precision):
 			# Compute targets
 			with torch.no_grad():
@@ -311,7 +312,7 @@ class TDMPC2(torch.nn.Module):
 			self.model.train()
 
 			# Latent rollout
-			zs = torch.empty(self.cfg.horizon+1, self.cfg.batch_size, self.cfg.latent_dim, device=self.device)
+			zs = torch.empty(horizon+1, batch_size, self.cfg.latent_dim, device=self.device)
 			z = self.model.encode(obs[0], task)
 			zs[0] = z
 			consistency_loss = 0
@@ -334,13 +335,13 @@ class TDMPC2(torch.nn.Module):
 				for _, qs_unbind_unbind in enumerate(qs_unbind.unbind(0)):
 					value_loss = value_loss + math.soft_ce(qs_unbind_unbind, td_targets_unbind, self.cfg).mean() * self.cfg.rho**t
 
-			consistency_loss = consistency_loss / self.cfg.horizon
-			reward_loss = reward_loss / self.cfg.horizon
+			consistency_loss = consistency_loss / horizon
+			reward_loss = reward_loss / horizon
 			if self.cfg.episodic:
 				termination_loss = F.binary_cross_entropy_with_logits(termination_pred, terminated)
 			else:
 				termination_loss = 0.
-			value_loss = value_loss / (self.cfg.horizon * self.cfg.num_q)
+			value_loss = value_loss / (horizon * self.cfg.num_q)
 			total_loss = (
 				self.cfg.consistency_coef * consistency_loss +
 				self.cfg.reward_coef * reward_loss +

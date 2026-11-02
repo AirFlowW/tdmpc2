@@ -190,3 +190,32 @@ class Buffer():
 			indices = torch.from_numpy(batch_starts[:, None] + np.arange(self.cfg.horizon + 1))
 			td = self._buffer[physical[indices.reshape(-1)]].view(-1, self.cfg.horizon + 1).permute(1, 0)
 			yield self._prepare_batch(td), padding
+
+
+	def transition_window_groups(self):
+		"""Tile each episode with disjoint transitions, retaining shorter final windows."""
+		from common.replay_dataset import episode_segments
+		indices = self.chronological_indices()
+		episodes = self._buffer.storage.get(slice(None))['episode'][indices].cpu().numpy()
+		groups = {}
+		for segment in episode_segments(episodes):
+			end = segment['start'] + segment['length'] - 1
+			for start in range(segment['start'], end, self.cfg.horizon):
+				length = min(self.cfg.horizon, end - start)
+				groups.setdefault(length, []).append(start)
+		return {length: np.asarray(starts, dtype=np.int64) for length, starts in groups.items()}
+
+	def iter_transition_epoch_batches(self, groups, rng):
+		"""Visit every stored transition once; use actual batch/window sizes, no padding."""
+		physical = self.chronological_indices()
+		# Batch equal lengths so short episodes/tails need no synthetic transitions.
+		batches = []
+		for length, starts in groups.items():
+			order = rng.permutation(starts)
+			for offset in range(0, len(order), self.cfg.batch_size):
+				batches.append((length, order[offset:offset + self.cfg.batch_size]))
+		for index in rng.permutation(len(batches)):
+			length, starts = batches[index]
+			indices = torch.from_numpy(starts[:, None] + np.arange(length + 1))
+			td = self._buffer[physical[indices.reshape(-1)]].view(-1, length + 1).permute(1, 0)
+			yield self._prepare_batch(td), 0

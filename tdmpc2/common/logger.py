@@ -1,4 +1,5 @@
 import dataclasses
+from hashlib import sha256
 import json
 import subprocess
 from pathlib import Path
@@ -80,6 +81,13 @@ def cfg_to_group(cfg, return_list=False):
 	return lst if return_list else "-".join(lst)
 
 
+def cfg_to_tags(cfg):
+	"""Keep W&B tags within 64 characters while retaining distinct long names."""
+	tags = cfg_to_group(cfg, return_list=True) + [f"seed:{cfg.seed}"]
+	return [tag if len(tag) <= 64 else f'{tag[:55]}-{sha256(tag.encode()).hexdigest()[:8]}'
+			for tag in tags]
+
+
 class VideoRecorder(ObservationVideoRecorder):
 	"""Utility class for logging evaluation videos."""
 
@@ -128,7 +136,7 @@ class Logger:
 			entity=self.entity,
 			name=cfg.get("wandb_name") or str(cfg.seed),
 			group=self._group,
-			tags=cfg_to_group(cfg, return_list=True) + [f"seed:{cfg.seed}"],
+			tags=cfg_to_tags(cfg),
 			dir=self._log_dir,
 			config=dataclasses.asdict(cfg),
 		)
@@ -161,7 +169,14 @@ class Logger:
 					type='model',
 				)
 				artifact.add_file(fp)
-				self._wandb.log_artifact(artifact)
+				# Include the config needed for standalone evaluation of downloaded models.
+				artifact.add_file(self._log_dir / 'config.yaml')
+				artifact.add_file(self._log_dir / 'revisions.json')
+				upload = self._wandb.log_artifact(artifact)
+				if identifier == 'pretrained':
+					# Make the offline model available before any online updates begin.
+					upload.wait(timeout=600)
+					print(f'Pretrained model uploaded to W&B: {upload.qualified_name}')
 
 	def finish(self, agent=None):
 		try:
