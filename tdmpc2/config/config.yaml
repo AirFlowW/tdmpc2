@@ -138,3 +138,4 @@ navigation:
     spawn_clearance: 5.0
     partial_obs: false
     max_episode_steps: 500
+    reward_scheme: sparse
