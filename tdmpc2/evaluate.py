@@ -51,6 +51,8 @@ def evaluate(cfg: dict):
 		report = evaluate_checkpoint(
 			cfg, cfg.checkpoint, episodes=cfg.eval_episodes, seed=cfg.seed + 1_000_000,
 			video_dir=cfg.work_dir / 'videos' if cfg.save_video else None,
+			image_dir=cfg.work_dir / 'eval_images' if cfg.get('save_episode_images', True) else None,
+			image_episodes=cfg.get('episode_image_count', 5),
 			include_baselines=False)
 		cfg.work_dir.mkdir(parents=True, exist_ok=True)
 		encoded = json.dumps(report, indent=2)

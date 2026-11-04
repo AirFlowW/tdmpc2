@@ -14,6 +14,7 @@ from termcolor import colored
 
 from common import TASK_SET
 from environments.video import ObservationVideoRecorder
+from environments.episode_images import EpisodeImageRecorder
 
 
 CONSOLE_FORMAT = [
@@ -127,6 +128,7 @@ class Logger:
 			print(colored("Wandb disabled.", "blue", attrs=["bold"]))
 			self._wandb = None
 			self._video = VideoRecorder(cfg, None) if cfg.save_video else None
+			self._episode_images = self._make_episode_images(cfg)
 			return
 		os.environ["WANDB_SILENT"] = "true" if cfg.wandb_silent else "false"
 		import wandb
@@ -150,6 +152,17 @@ class Logger:
 			if self._wandb and cfg.save_video
 			else None
 		)
+		self._episode_images = self._make_episode_images(cfg)
+
+	def _make_episode_images(self, cfg):
+		if cfg.task in ('dot-avoidance', 'dot-navigation') and cfg.get('save_episode_images', True):
+			return EpisodeImageRecorder(cfg.work_dir / 'eval_images', self._wandb,
+				max_episodes=cfg.get('episode_image_count', 5))
+		return None
+
+	@property
+	def episode_images(self):
+		return self._episode_images
 
 	@property
 	def video(self):

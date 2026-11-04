@@ -59,7 +59,8 @@ class VectorTrainer(Trainer):
         results = evaluate_conditions(
             settings, self.cfg.obs, self.cfg.frame_stack, TDMPCPolicy(self.agent),
             self.cfg.eval_episodes, self.cfg.seed + 1_000_000,
-            video=self.logger.video, video_step=self._step, task=self.cfg.task)
+            video=self.logger.video, video_step=self._step, task=self.cfg.task,
+            images=getattr(self.logger, 'episode_images', None))
         metrics = training_metrics(results, settings.get('partial_obs', False))
         if self.cfg.get('latent_analysis', {}).get('enabled', False):
             if self._latent_evaluator is None:

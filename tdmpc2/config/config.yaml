@@ -82,6 +82,8 @@ save_csv: true
 # misc
 compile: true
 save_video: true
+save_episode_images: true
+episode_image_count: 5
 save_agent: true
 seed: 1
 
