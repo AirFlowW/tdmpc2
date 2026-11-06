@@ -14,7 +14,7 @@ from termcolor import colored
 
 from common import TASK_SET
 from environments.video import ObservationVideoRecorder
-from environments.episode_images import EpisodeImageRecorder
+from environments.episode_images import make_episode_image_recorder
 
 
 CONSOLE_FORMAT = [
@@ -94,7 +94,7 @@ class VideoRecorder(ObservationVideoRecorder):
 
 	def __init__(self, cfg, wandb, fps=15):
 		self.cfg = cfg
-		super().__init__(cfg.work_dir / 'eval_video', wandb, fps)
+		super().__init__(cfg.work_dir / 'eval_video', wandb, 10 if cfg.task == 'pusht' else fps)
 
 
 class Logger:
@@ -155,8 +155,8 @@ class Logger:
 		self._episode_images = self._make_episode_images(cfg)
 
 	def _make_episode_images(self, cfg):
-		if cfg.task in ('dot-avoidance', 'dot-navigation') and cfg.get('save_episode_images', True):
-			return EpisodeImageRecorder(cfg.work_dir / 'eval_images', self._wandb,
+		if cfg.task in ('dot-avoidance', 'dot-navigation', 'pusht') and cfg.get('save_episode_images', True):
+			return make_episode_image_recorder(cfg.task, cfg.work_dir / 'eval_images', wandb=self._wandb,
 				max_episodes=cfg.get('episode_image_count', 5))
 		return None
 

@@ -1,0 +1,15 @@
+defaults:
+  - pusht
+  - _self_
+
+# Dense 10 Hz observations: current frame and 127 previous frames (12.7 s).
+frame_stack: 128
+pusht:
+  partial_obs: true
+
+# Long RGB stacks need explicit memory/transfer budgets.
+# 50k * 128 * 3 * 64 * 64 uint8 pixels = 73.24 GiB, plus replay metadata.
+buffer_size: 50000
+buffer_device: cpu
+batch_size: 64
+exp_name: pusht_rgb_hidden_crossbar_history128_500k

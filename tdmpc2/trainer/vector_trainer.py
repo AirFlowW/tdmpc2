@@ -192,19 +192,28 @@ class VectorTrainer(Trainer):
                     self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
                     self.logger.save_agent(self.agent, identifier=str(self._step))
                     next_eval = (self._step // cfg.eval_freq + 1) * cfg.eval_freq
+            if self._stop_requested:
+                # A long RGB history can make concatenating live episodes take
+                # longer than the scheduler's remaining grace period. Preserve
+                # the small model before any replay assembly or export.
+                self.logger.save_agent(self.agent, identifier='interrupted')
+                if not cfg.get('save_replay_buffer', False):
+                    self._tds.clear()
             self._flush()
             self.logger.log(dict(self._last_metrics, **self.metrics(),
                                  stopped_early=self._stop_requested), 'train')
             if not self._stop_requested:
                 self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
-            try:
-                if cfg.get('save_replay_buffer', False):
-                    path = cfg.work_dir / 'replay'
-                    snapshot = self.buffer.save_dataset(path)
-                    print(f'Saved {snapshot["rows"]:,} replay rows to {path}')
-            finally:
-                # An export failure must not prevent the final model from being saved.
-                self.logger.finish(self.agent)
+            if cfg.get('save_replay_buffer', False):
+                path = cfg.work_dir / 'replay'
+                snapshot = self.buffer.save_dataset(path)
+                print(f'Saved {snapshot["rows"]:,} replay rows to {path}')
         finally:
-            self._flush()
-            self.env.close()
+            try:
+                # Preserve the model even if collection, evaluation, or replay
+                # processing fails. A second replay flush here could mask the
+                # original error and prevent saving or closing the workers.
+                self.logger.finish(self.agent)
+            finally:
+                self._tds.clear()
+                self.env.close()
