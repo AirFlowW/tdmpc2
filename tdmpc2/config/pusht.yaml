@@ -21,3 +21,4 @@ pusht:
   max_episode_steps: 300
   action_scale: 100.0
   partial_obs: false  # true hides the moving crossbar while preserving contacts
+  bound_targets: false  # opt-in controller variant; old experiments remain unbounded

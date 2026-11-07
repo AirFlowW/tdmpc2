@@ -139,7 +139,7 @@ class Logger:
 			name=cfg.get("wandb_name") or str(cfg.seed),
 			group=self._group,
 			tags=cfg_to_tags(cfg),
-			dir=self._log_dir,
+			dir=os.environ.get("WANDB_DIR", self._log_dir),
 			config=dataclasses.asdict(cfg),
 		)
 		print(colored("Logs will be synced with wandb.", "blue", attrs=["bold"]))
