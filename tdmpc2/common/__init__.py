@@ -1,4 +1,9 @@
 MODEL_SIZE = { # parameters (M)
+	# Named ablations: retain parent widths; project CNN features before SimNorm.
+	'1_latent22': {'enc_dim': 256, 'mlp_dim': 384, 'latent_dim': 22,
+		'num_enc_layers': 2, 'num_q': 2, 'num_channels': 8, 'simnorm_dim': 2},
+	'5_latent60': {'enc_dim': 256, 'mlp_dim': 512, 'latent_dim': 60,
+		'num_enc_layers': 2, 'num_channels': 32, 'simnorm_dim': 2},
 	1:   {'enc_dim': 256,
 		  'mlp_dim': 384,
 		  'latent_dim': 128,
