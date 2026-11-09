@@ -81,6 +81,7 @@ save_csv: true
 
 # misc
 compile: true
+episode_reward_avg_window: 100 # Completed training episodes in the moving average
 save_video: true
 save_episode_images: true
 episode_image_count: 5

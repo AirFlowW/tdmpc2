@@ -184,7 +184,8 @@ class VectorTrainer(Trainer):
                         credit -= 1
                 if finished:
                     summary = {key: np.mean([ep[key] for ep in finished]) for key in finished[0]}
-                    self.logger.log(dict(self._last_metrics, **summary, **self.metrics()), 'train')
+                    self.logger.log(dict(self._last_metrics, **summary, **self.metrics()), 'train',
+                                    episode_rewards=[ep['episode_reward'] for ep in finished])
                 # Entering learned control from warmup also needs fresh planner histories.
                 reset_mask = dones if learning else np.ones(cfg.num_envs, dtype=bool)
                 obs = next_obs

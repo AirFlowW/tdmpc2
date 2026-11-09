@@ -1,4 +1,5 @@
 import dataclasses
+from collections import deque
 from hashlib import sha256
 import json
 import subprocess
@@ -109,6 +110,10 @@ class Logger:
 		self._seed = cfg.seed
 		self._eval = []
 		self._records = {}
+		window = cfg.get("episode_reward_avg_window", 100)
+		if type(window) is not int or window < 1:
+			raise ValueError("episode_reward_avg_window must be a positive integer")
+		self._episode_rewards = deque(maxlen=window)
 		resolved = json.loads(json.dumps(dataclasses.asdict(cfg), default=str))
 		with open(cfg.work_dir / 'config.yaml', 'w') as stream:
 			yaml.safe_dump(resolved, stream, sort_keys=False)
@@ -147,6 +152,7 @@ class Logger:
 		for category, axis in (("train", "step"), ("eval", "step"), ("pretrain", "iteration")):
 			wandb.define_metric(f"{category}/{axis}")
 			wandb.define_metric(f"{category}/*", step_metric=f"{category}/{axis}")
+		wandb.define_metric("videos/*", step_metric="eval/step")
 		self._video = (
 			VideoRecorder(cfg, self._wandb)
 			if self._wandb and cfg.save_video
@@ -155,7 +161,7 @@ class Logger:
 		self._episode_images = self._make_episode_images(cfg)
 
 	def _make_episode_images(self, cfg):
-		if cfg.task in ('dot-avoidance', 'dot-navigation', 'pusht') and cfg.get('save_episode_images', True):
+		if cfg.task in ('dot-avoidance', 'dot-navigation', 'pusht') and (cfg.save_video or cfg.get('save_episode_images', True)):
 			return make_episode_image_recorder(cfg.task, cfg.work_dir / 'eval_images', wandb=self._wandb,
 				max_episodes=cfg.get('episode_image_count', 5))
 		return None
@@ -257,8 +263,12 @@ class Logger:
 			print(colored(f'  {"metaworld":<22}\tR: {metaworld_reward:.01f}', 'yellow', attrs=['bold']))
 			print(colored(f'  {"metaworld":<22}\tS: {metaworld_success:.02f}', 'yellow', attrs=['bold']))
 
-	def log(self, d, category="train"):
+	def log(self, d, category="train", *, episode_rewards=None):
 		assert category in CAT_TO_COLOR.keys(), f"invalid category: {category}"
+		if category == "train" and "episode_reward" in d:
+			rewards = [d["episode_reward"]] if episode_rewards is None else episode_rewards
+			self._episode_rewards.extend(float(reward) for reward in rewards)
+			d = dict(d, episode_reward_moving_avg=float(np.mean(self._episode_rewards)))
 		if self._wandb:
 			_d = dict()
 			for k, v in d.items():
