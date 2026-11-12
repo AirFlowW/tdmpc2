@@ -45,6 +45,8 @@ class ShiftAug(nn.Module):
 
 	def forward(self, x):
 		x = x.float()
+		if self.pad == 0:
+			return x
 		n, _, h, w = x.size()
 		assert h == w
 		x = F.pad(x, self.padding, 'replicate')
@@ -133,14 +135,14 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 	return nn.Sequential(*mlp)
 
 
-def conv(in_shape, num_channels, act=None):
+def conv(in_shape, num_channels, act=None, random_shift=False):
 	"""
 	Basic convolutional encoder for TD-MPC2 with raw image observations.
 	4 layers of convolution with ReLU activations, followed by a linear layer.
 	"""
 	assert in_shape[-1] == 64 # assumes rgb observations to be 64x64
 	layers = [
-		ShiftAug(), PixelPreprocess(),
+		ShiftAug(pad=3 if random_shift else 0), PixelPreprocess(),
 		nn.Conv2d(in_shape[0], num_channels, 7, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 5, stride=2), nn.ReLU(inplace=False),
 		nn.Conv2d(num_channels, num_channels, 3, stride=2), nn.ReLU(inplace=False),
@@ -160,9 +162,9 @@ def enc(cfg):
 			out[k] = mlp(cfg.obs_shape[k][0] + cfg.task_dim, max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim], cfg.latent_dim, act=SimNorm(cfg))
 		elif k == 'rgb':
 			if cfg.latent_dim == cfg.num_channels * 16:
-				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg))
+				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg), random_shift=cfg.get('random_shift', True))
 			else:
-				out[k] = conv(cfg.obs_shape[k], cfg.num_channels)
+				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, random_shift=cfg.get('random_shift', True))
 				out[k].append(nn.Linear(cfg.num_channels * 16, cfg.latent_dim))
 				out[k].append(SimNorm(cfg))
 		else:
