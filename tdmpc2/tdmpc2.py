@@ -38,6 +38,8 @@ class TDMPC2(torch.nn.Module):
 			 }
 		], lr=self.cfg.lr, capturable=self.device.type == 'cuda', fused=True if cfg.fused_optimizer else None,
 			foreach=False if self.device.type != 'cuda' else None)
+		if self.model._state is not None:
+			self.optim.add_param_group({'params': self.model._state.parameters()})
 		self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5,
 			capturable=self.device.type == 'cuda', fused=True if cfg.fused_optimizer else None,
 			foreach=False if self.device.type != 'cuda' else None)
@@ -120,7 +122,8 @@ class TDMPC2(torch.nn.Module):
 		Returns:
 			torch.Tensor: Action to take in the environment.
 		"""
-		obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
+		from environments.tdmpc2 import observation_tensor
+		obs = observation_tensor(obs).to(self.device, non_blocking=True).unsqueeze(0)
 		if task is not None:
 			task = torch.tensor([task], device=self.device)
 		if self.cfg.mpc:
@@ -141,7 +144,8 @@ class TDMPC2(torch.nn.Module):
 		from common.planning import batched_plan
 		if self.cfg.multitask:
 			raise ValueError('Batched collection currently supports single-task agents only')
-		obs = torch.as_tensor(observations).to(self.device)
+		from environments.tdmpc2 import observation_tensor
+		obs = observation_tensor(observations).to(self.device)
 		if not self.cfg.mpc:
 			z = self.model.encode(obs, None)
 			action, info = self.model.pi(z, None)
@@ -300,7 +304,7 @@ class TDMPC2(torch.nn.Module):
 		discount = self.discount[task].unsqueeze(-1) if self.cfg.multitask else self.discount
 		return reward + discount * (1-terminated) * self.model.Q(next_z, action, task, return_type='min', target=True)
 
-	def _update(self, obs, action, reward, terminated, task=None):
+	def _update(self, obs, action, reward, terminated, task=None, state=None):
 		horizon, batch_size = action.shape[:2]
 		with torch.autocast('cuda', dtype=torch.bfloat16, enabled=self.cfg.mixed_precision):
 			# Compute targets
@@ -327,6 +331,8 @@ class TDMPC2(torch.nn.Module):
 			reward_preds = self.model.reward(_zs, action, task)
 			if self.cfg.episodic:
 				termination_pred = self.model.termination(zs[1:], task, unnormalized=True)
+			if self.model._state is not None:
+				state_preds = self.model.state(_zs, task)
 
 			# Compute losses
 			reward_loss, value_loss = 0, 0
@@ -342,12 +348,19 @@ class TDMPC2(torch.nn.Module):
 			else:
 				termination_loss = 0.
 			value_loss = value_loss / (horizon * self.cfg.num_q)
+			state_loss = 0.
+			if self.model._state is not None:
+				# Like reward supervision: rho-weighted loss on encoded z_0 and imagined z_t.
+				state_loss = sum(F.mse_loss(state_preds[t].float(), state[t]) * self.cfg.rho**t
+					for t in range(horizon)) / horizon
 			total_loss = (
 				self.cfg.consistency_coef * consistency_loss +
 				self.cfg.reward_coef * reward_loss +
 				self.cfg.termination_coef * termination_loss +
 				self.cfg.value_coef * value_loss
 			)
+			if self.model._state is not None:
+				total_loss = total_loss + self.cfg.get('state_coef', 1.0) * state_loss
 
 		# Update model
 		total_loss.backward()
@@ -371,6 +384,8 @@ class TDMPC2(torch.nn.Module):
 			"total_loss": total_loss,
 			"grad_norm": grad_norm,
 		}
+		if self.model._state is not None:
+			info['state_loss'] = state_loss
 		if self.cfg.episodic:
 			info.update(math.termination_statistics(torch.sigmoid(termination_pred[-1]), terminated[-1]))
 		info.update(pi_info)
@@ -391,8 +406,15 @@ class TDMPC2(torch.nn.Module):
 
 	def update_batch(self, batch):
 		"""Run the same learner update on an explicitly prepared replay batch."""
-		obs, action, reward, terminated, task = batch
+		obs, action, reward, terminated, task = batch[:5]
 		kwargs = {}
+		if self.model._state is not None:
+			if len(batch) != 6 or batch[5] is None:
+				raise ValueError('state_head=true requires aligned state targets in replay')
+			state = batch[5]
+			if state.shape != (action.shape[0] + 1, action.shape[1], self.cfg.get('state_dim', 2)):
+				raise ValueError('State targets must have shape (horizon+1, batch, state_dim)')
+			kwargs['state'] = state
 		if task is not None:
 			kwargs["task"] = task
 		mark_step(self.device)

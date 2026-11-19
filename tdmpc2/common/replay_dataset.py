@@ -14,13 +14,36 @@ from zipfile import BadZipFile
 
 import numpy as np
 import torch
-from tensordict import TensorDict
+from tensordict import TensorDict, TensorDictBase
 
 
 FORMAT = 'tdmpc2-replay'
 VERSION = 1
 CHUNK_BYTES = 64 * 1024 * 1024
 FIELDS = ('obs', 'action', 'reward', 'terminated', 'episode')
+
+
+def replay_arrays(td):
+    """Flatten optional mixed observations into non-object NumPy arrays."""
+    arrays = {key: td[key].numpy() for key in FIELDS if key != 'obs'}
+    obs = td['obs']
+    if isinstance(obs, TensorDictBase):
+        arrays['obs'] = obs['rgb'].numpy()
+        arrays['obs_agent_position'] = obs['agent_position'].numpy()
+    else:
+        arrays['obs'] = obs.numpy()
+    if 'state' in td.keys():
+        arrays['state'] = td['state'].numpy()
+    return arrays
+
+
+def replay_tensors(arrays):
+    values = {key: torch.from_numpy(value) for key, value in arrays.items()}
+    count = len(values['obs'])
+    if 'obs_agent_position' in values:
+        values['obs'] = TensorDict(dict(rgb=values['obs'],
+            agent_position=values.pop('obs_agent_position')), batch_size=[count])
+    return TensorDict(values, batch_size=[count])
 
 
 def episode_segments(episodes):
@@ -66,22 +89,23 @@ def save_dataset(buffer, path, *, chunk_bytes=CHUNK_BYTES):
     try:
         indices = buffer.chronological_indices()
         if len(indices):
-            first = buffer._buffer[indices[:1]].select(*FIELDS)
+            first = buffer._buffer[indices[:1]].select(*FIELDS, 'state', strict=False).to('cpu')
+            first_arrays = replay_arrays(first)
             manifest['fields'] = {
-                key: dict(dtype=value.cpu().numpy().dtype.str, shape=list(value.shape[1:]))
-                for key, value in first.items()
+                key: dict(dtype=value.dtype.str, shape=list(value.shape[1:]))
+                for key, value in first_arrays.items()
             }
-            row_bytes = sum(value.numel() * value.element_size() for value in first.values())
+            row_bytes = sum(value.nbytes for value in first_arrays.values())
             rows_per_chunk = max(1, chunk_bytes // row_bytes)
             # Episode IDs are small; observations are copied only one shard at a time.
             episodes = buffer._buffer.storage.get(slice(None))['episode'][indices].cpu().numpy()
             manifest['segments'] = episode_segments(episodes)
             manifest['rows'] = len(indices)
-            del first, episodes
+            del first, first_arrays, episodes
             for start in range(0, len(indices), rows_per_chunk):
                 end = min(start + rows_per_chunk, len(indices))
-                td = buffer._buffer[indices[start:end]].select(*FIELDS).to('cpu')
-                arrays = {key: value.numpy() for key, value in td.items()}
+                td = buffer._buffer[indices[start:end]].select(*FIELDS, 'state', strict=False).to('cpu')
+                arrays = replay_arrays(td)
                 encoded, encoding = _encode(arrays, buffer.cfg.obs == 'rgb')
                 filename = f'part-{len(manifest["shards"]):05d}.npz'
                 np.savez_compressed(staging / filename, **encoded)
@@ -139,7 +163,11 @@ def read_manifest(path, cfg, capacity):
         expected = dict(obs=(cfg.obs_shape[cfg.obs], 'uint8' if cfg.obs == 'rgb' else 'float32'),
                         action=([cfg.action_dim], 'float32'), reward=([], 'float32'),
                         terminated=([], 'float32'), episode=([], 'int64'))
-        if set(manifest['fields']) != set(FIELDS):
+        if cfg.get('state_input', False):
+            expected['obs_agent_position'] = ([cfg.get('state_dim', 2)], 'float32')
+        if cfg.get('state_head', False) or 'state' in manifest['fields']:
+            expected['state'] = ([cfg.get('state_dim', 2)], 'float32')
+        if set(manifest['fields']) != set(expected):
             raise ValueError('Invalid replay fields')
         for key, (shape, dtype) in expected.items():
             spec = manifest['fields'][key]
@@ -191,7 +219,7 @@ def iter_dataset_chunks(path, manifest):
                 arrays = {key: archive[key] for key in archive.files}
             count = shard['rows']
             if shard['observation_encoding'] == 'frame_stack':
-                if set(arrays) != (set(FIELDS) - {'obs'}) | {'obs_initial', 'obs_frames'}:
+                if set(arrays) != (set(manifest['fields']) - {'obs'}) | {'obs_initial', 'obs_frames'}:
                     raise ValueError('Invalid frame-stack arrays')
                 episodes = arrays['episode']
                 if episodes.shape != (count,):
@@ -214,7 +242,7 @@ def iter_dataset_chunks(path, manifest):
                         obs[row, :-3] = obs[row - 1, 3:]
                         obs[row, -3:] = frames[row]
                 arrays['obs'] = obs
-            if set(arrays) != set(FIELDS):
+            if set(arrays) != set(manifest['fields']):
                 raise ValueError('Invalid replay arrays')
             for key, spec in manifest['fields'].items():
                 value = arrays[key]
@@ -231,8 +259,7 @@ def iter_dataset_chunks(path, manifest):
                 if left < right and not np.all(arrays['episode'][left - begin:right - begin] == segment['episode']):
                     raise ValueError('Replay episode IDs do not match the manifest')
                 index += 1
-            yield TensorDict({key: torch.from_numpy(value) for key, value in arrays.items()},
-                             batch_size=[count])
+            yield replay_tensors(arrays)
         except (OSError, KeyError, TypeError, ValueError, EOFError, BadZipFile) as exc:
             raise ValueError(f'Invalid replay shard {filename}: {exc}') from exc
 
@@ -263,11 +290,12 @@ class ReplayDatasetWriter:
     def append_episode(self, td):
         if len(td) < 2:
             raise ValueError('An episode fragment must contain a reset row and a transition')
-        td = td.select('obs', 'action', 'reward', 'terminated').to('cpu').clone()
+        td = td.select('obs', 'action', 'reward', 'terminated', 'state', strict=False).to('cpu').clone()
         episode = self.manifest['num_episodes_added']
         td['episode'] = torch.full((len(td),), episode, dtype=torch.int64)
-        fields = {key: dict(dtype=value.numpy().dtype.str, shape=list(value.shape[1:]))
-                  for key, value in td.items()}
+        arrays = replay_arrays(td)
+        fields = {key: dict(dtype=value.dtype.str, shape=list(value.shape[1:]))
+                  for key, value in arrays.items()}
         if self.manifest['fields'] and fields != self.manifest['fields']:
             raise ValueError('Incompatible episode fields')
         self.manifest['fields'] = fields
@@ -275,7 +303,7 @@ class ReplayDatasetWriter:
         self.manifest['rows'] += len(td)
         self.manifest['num_episodes_added'] += 1
         self.pending.append(td)
-        self.pending_bytes += sum(value.numel() * value.element_size() for value in td.values())
+        self.pending_bytes += sum(value.nbytes for value in arrays.values())
         if self.pending_bytes >= self.chunk_bytes:
             self._flush()
 
@@ -283,7 +311,7 @@ class ReplayDatasetWriter:
         if not self.pending:
             return
         td = torch.cat(self.pending)
-        encoded, encoding = _encode({key: value.numpy() for key, value in td.items()}, self.rgb)
+        encoded, encoding = _encode(replay_arrays(td), self.rgb)
         filename = f'part-{len(self.manifest["shards"]):05d}.npz'
         np.savez_compressed(self.staging / filename, **encoded)
         self.manifest['shards'].append(dict(file=filename, start=self.manifest['rows'] - len(td),

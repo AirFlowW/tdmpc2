@@ -115,7 +115,7 @@ class Buffer():
 		Expects `td` to be a TensorDict with batch size TxB.
 		"""
 		# MPS async copies can outlive temporary CPU batches and read freed storage.
-		td = td.select("obs", "action", "reward", "terminated", "task", strict=False).to(
+		td = td.select("obs", "action", "reward", "terminated", "task", "state", strict=False).to(
 			self._device, non_blocking=self._device.type == 'cuda')
 		obs = td.get('obs').contiguous()
 		action = td.get('action')[1:].contiguous()
@@ -128,7 +128,13 @@ class Buffer():
 		task = td.get('task', None)
 		if task is not None:
 			task = task[0].contiguous()
-		return obs, action, reward, terminated, task
+		batch = obs, action, reward, terminated, task
+		if self.cfg.get('state_head', False):
+			state = td.get('state', None)
+			if state is None:
+				raise ValueError('state_head=true requires state targets in replay')
+			return (*batch, state.contiguous())
+		return batch
 
 	@property
 	def ready(self):

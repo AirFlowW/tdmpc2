@@ -30,6 +30,10 @@ class WorldModel(nn.Module):
 		self._Qs = layers.Ensemble([layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout).apply(init.weight_init) for _ in range(cfg.num_q)])
 		self.apply(init.weight_init)
 		init.zero_([self._reward[-1].weight, self._Qs.params["2", "weight"]])
+		# Initialize afterwards to keep the shared modules identical for a given seed.
+		# Disabled heads add no parameters or checkpoint keys.
+		self._state = (layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.get('state_dim', 2)).apply(init.weight_init)
+			if cfg.get('state_head', False) else None)
 
 		self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
 		self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max) - self.log_std_min)
@@ -61,6 +65,8 @@ class WorldModel(nn.Module):
 			if m == self._termination and not self.cfg.episodic:
 				continue
 			repr += f"{modules[i]}: {m}\n"
+		if self._state is not None:
+			repr += f"State: {self._state}\n"
 		repr += "Learnable parameters: {:,}".format(self.total_params)
 		return repr
 
@@ -105,13 +111,22 @@ class WorldModel(nn.Module):
 	def encode(self, obs, task):
 		"""
 		Encodes an observation into its latent representation.
-		This implementation assumes a single state-based observation.
+		Accepts legacy tensors or RGB plus current agent position.
 		"""
 		if self.cfg.multitask:
 			obs = self.task_emb(obs, task)
-		if self.cfg.obs == 'rgb' and obs.ndim == 5:
-			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
+		pixels = obs['rgb'] if self.cfg.get('state_input', False) else obs
+		if self.cfg.obs == 'rgb' and pixels.ndim == 5:
+			return torch.stack([self._encoder[self.cfg.obs](obs[t]) for t in range(pixels.shape[0])])
 		return self._encoder[self.cfg.obs](obs)
+
+	def state(self, z, task=None):
+		"""Predict the supervised state subset from the latent, without privileged inputs."""
+		if self._state is None:
+			raise ValueError('State prediction requires state_head=true')
+		if self.cfg.multitask:
+			z = self.task_emb(z, task)
+		return self._state(z)
 
 	def next(self, z, a, task):
 		"""

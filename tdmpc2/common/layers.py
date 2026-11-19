@@ -152,19 +152,37 @@ def conv(in_shape, num_channels, act=None, random_shift=False):
 	return nn.Sequential(*layers)
 
 
+class RGBStateEncoder(nn.Module):
+
+	def __init__(self, cfg):
+		super().__init__()
+		self.image = conv(cfg.obs_shape['rgb'], cfg.num_channels,
+			random_shift=cfg.get('random_shift', True))
+		self.fusion = NormedLinear(cfg.num_channels * 16 + cfg.get('state_dim', 2),
+			cfg.latent_dim, act=SimNorm(cfg))
+
+	def forward(self, obs):
+		features = self.image(obs['rgb'])
+		return self.fusion(torch.cat([features, obs['agent_position'].to(features.dtype)], dim=-1))
+
+
 def enc(cfg):
 	"""
 	Returns a dictionary of encoders for each observation in the dict.
 	"""
 	out = {}
+	if cfg.get('state_input', False):
+		return nn.ModuleDict({'rgb': RGBStateEncoder(cfg)})
 	for k in cfg.obs_shape.keys():
 		if k == 'state':
 			out[k] = mlp(cfg.obs_shape[k][0] + cfg.task_dim, max(cfg.num_enc_layers-1, 1)*[cfg.enc_dim], cfg.latent_dim, act=SimNorm(cfg))
 		elif k == 'rgb':
 			if cfg.latent_dim == cfg.num_channels * 16:
-				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg), random_shift=cfg.get('random_shift', True))
+				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, act=SimNorm(cfg),
+					random_shift=cfg.get('random_shift', True))
 			else:
-				out[k] = conv(cfg.obs_shape[k], cfg.num_channels, random_shift=cfg.get('random_shift', True))
+				out[k] = conv(cfg.obs_shape[k], cfg.num_channels,
+					random_shift=cfg.get('random_shift', True))
 				out[k].append(nn.Linear(cfg.num_channels * 16, cfg.latent_dim))
 				out[k].append(SimNorm(cfg))
 		else:

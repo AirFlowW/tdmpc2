@@ -13,17 +13,22 @@ from tqdm import tqdm
 from common.device import mark_step
 from environments.evaluation import TDMPCPolicy, evaluate_conditions, training_metrics, episode_metrics
 from environments.tasks import task_settings
+from environments.tdmpc2 import observation_tensor
 from trainer.base import Trainer
 
 
-def transition(obs, action=None, reward=float('nan'), terminated=float('nan'), *, action_dim=2):
+def transition(obs, action=None, reward=float('nan'), terminated=float('nan'), *, action_dim=2,
+               state=None):
     """Incoming action/reward belong to the observation in the same row."""
-    return TensorDict(dict(
-        obs=torch.as_tensor(np.array(obs, copy=True)).unsqueeze(0),
+    row = TensorDict(dict(
+        obs=observation_tensor(obs).clone().unsqueeze(0),
         action=(torch.full((action_dim,), float('nan')) if action is None else torch.as_tensor(action, dtype=torch.float32).clone()).unsqueeze(0),
         reward=torch.tensor([reward], dtype=torch.float32),
         terminated=torch.tensor([terminated], dtype=torch.float32),
     ), batch_size=[1])
+    if state is not None:
+        row['state'] = torch.as_tensor(state, dtype=torch.float32).clone().unsqueeze(0)
+    return row
 
 
 class VectorTrainer(Trainer):
@@ -75,6 +80,10 @@ class VectorTrainer(Trainer):
                 # Partial episodes retain terminated=False and their actual last observation.
                 self.buffer.add(torch.cat(rows))
         self._tds = []
+
+    def _transition(self, obs, info, action=None, reward=float('nan'), terminated=float('nan')):
+        state = info['agent_position_normalized'] if self.cfg.get('state_head', False) else None
+        return transition(obs, action, reward, terminated, action_dim=self.cfg.action_dim, state=state)
 
     def _pretrain(self):
         if not self.cfg.get('pretrain_data_path'):
@@ -147,8 +156,10 @@ class VectorTrainer(Trainer):
         next_eval, credit = cfg.eval_freq, 0.0
         try:
             self._pretrain()
-            obs, _ = self.env.reset(seed=[cfg.seed + i for i in range(cfg.num_envs)])
-            self._tds = [[transition(o, action_dim=cfg.action_dim)] for o in obs]
+            obs, infos = self.env.reset(seed=[cfg.seed + i for i in range(cfg.num_envs)])
+            obs = observation_tensor(obs)
+            self._tds = [[self._transition(obs[i], {key: value[i] for key, value in infos.items()})]
+                         for i in range(cfg.num_envs)]
             reset_mask = np.ones(cfg.num_envs, dtype=bool)
             self.logger.log(dict(self.eval(), **self.metrics()), 'eval')
             while self._step < cfg.steps and not self._stop_requested:
@@ -160,20 +171,24 @@ class VectorTrainer(Trainer):
                 self._planning_time += perf_counter() - start
                 start = perf_counter()
                 next_obs, rewards, terminated, truncated, infos = self.env.step(actions)
+                next_obs = observation_tensor(next_obs)
                 self._collection_time += perf_counter() - start
                 dones = terminated | truncated
                 self._step += cfg.num_envs
                 finished = []
                 for i in range(cfg.num_envs):
                     final_obs = infos['final_observation'][i] if dones[i] else next_obs[i]
-                    self._tds[i].append(transition(final_obs, actions[i], rewards[i], terminated[i]))
+                    info = (infos['final_info'][i] if dones[i] else
+                            {key: value[i] for key, value in infos.items()})
+                    self._tds[i].append(self._transition(final_obs, info, actions[i], rewards[i], terminated[i]))
                     if dones[i]:
                         info = infos['final_info'][i]
                         self.buffer.add(torch.cat(self._tds[i]))
                         finished.append(episode_metrics(info,
                             sum(float(row['reward'][0]) for row in self._tds[i][1:]),
                             info['elapsed_steps'], cfg.task))
-                        self._tds[i] = [transition(next_obs[i], action_dim=cfg.action_dim)]
+                        reset_info = {key: value[i] for key, value in infos.items()}
+                        self._tds[i] = [self._transition(next_obs[i], reset_info)]
                 if learning:
                     credit += cfg.num_envs * cfg.updates_per_transition
                     while credit >= 1 and not self._stop_requested:

@@ -20,7 +20,8 @@ latent_analysis:
     seed: null  # null selects training seed + 2,000,000
 
 # training
-# Disable random image shifts for new runs; missing keys preserve legacy behavior.
+# Disabled for new runs. Legacy saved configs without this key retain their
+# historical augmentation behavior; random_shift=true explicitly opts in.
 random_shift: false
 steps: 10_000_000
 batch_size: 256
@@ -28,6 +29,12 @@ reward_coef: 0.1
 value_coef: 0.1
 termination_coef: 1
 consistency_coef: 20
+# Optional supervision of own normalized x/y, or RGB plus x/y encoder input.
+# Supported by dot-navigation with obs=rgb; both false preserves legacy behavior.
+state_head: false
+state_input: false
+state_dim: 2
+state_coef: 1.0
 rho: 0.5
 lr: 3e-4
 enc_lr_scale: 0.3
